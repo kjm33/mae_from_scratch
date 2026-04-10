@@ -1,0 +1,9 @@
+accelerate
+numpy
+opencv-python
+pillow
+tensorboard
+timm
+torch
+torchvision
+tqdm
