@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+import bitsandbytes as bnb
 from training_logger import TrainingLogger
 
 from mae import MaskedAutoencoderViT, YiddishSharedInRamDataset
@@ -20,7 +21,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "2_accelerator_disabled"
+TENSORBOARD_PROFILE = "3_8_bit_optimizer"
 
 
 def find_monitor_image(lines_dir):
@@ -96,7 +97,8 @@ def train():
         prefetch_factor=4,
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05)
+    #from https://medium.com/@jiminlee-ai/why-your-tiny-deep-learning-model-is-hogging-all-your-gpu-vram-85bc58ee5050
+    optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=1.5e-4, weight_decay=0.05)
     model = torch.compile(model, mode="reduce-overhead")
 
     num_epochs = 6

@@ -42,6 +42,32 @@
 # Optimizer
 optimizer.step() <- + 2 GB of VRAM
 
+using bnb 8-bit version of optimizer reduced slightly memory usage ~600 MB less
+
+optimizer calls synchronization
+
+```
+Traceback (most recent call last):
+  File "/home/kamil/projects/mae_from_scratch/train.py", line 127, in <module>
+    train()
+  File "/home/kamil/projects/mae_from_scratch/train.py", line 119, in train
+    optimizer.step()
+  File "/home/kamil/projects/mae_from_scratch/venv/lib/python3.12/site-packages/torch/optim/optimizer.py", line 526, in wrapper
+    out = func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kamil/projects/mae_from_scratch/venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kamil/projects/mae_from_scratch/venv/lib/python3.12/site-packages/bitsandbytes/optim/optimizer.py", line 329, in step
+    sync_gpu(p)
+  File "/home/kamil/projects/mae_from_scratch/venv/lib/python3.12/site-packages/bitsandbytes/utils.py", line 203, in sync_gpu
+    torch.cuda.synchronize()
+  File "/home/kamil/projects/mae_from_scratch/venv/lib/python3.12/site-packages/torch/cuda/__init__.py", line 1108, in synchronize
+    return torch._C._cuda_synchronize()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+```
+
 
 ● Line 113 is optimizer.step(). The CPU spike comes from how AdamW dispatches work to the GPU.
 

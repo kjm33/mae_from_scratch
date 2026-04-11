@@ -1,3 +1,22 @@
+Dataset ready. Loaded: 7279 images.
+Epoch 1/6 avg_loss=0.9056 time=18.5s
+Epoch 2/6 avg_loss=0.6270 time=12.6s
+Epoch 3/6 avg_loss=0.6189 time=12.4s
+Epoch 4/6 avg_loss=0.6069 time=12.6s
+Epoch 5/6 avg_loss=0.5986 time=12.7s
+Epoch 6/6 avg_loss=0.5943 time=12.7s
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 29/29 loss 0.5932 VRAM 16.0 GB 0:00:12
+  Training Summary — 3_8_bit_optimizer
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value                ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.02 h  (81 s)       │
+│ Total steps   │ 174                  │
+│ Avg steps/sec │ 2.14                 │
+│ Peak VRAM     │ 15.98 GB  (16360 MB) │
+│ Avg loss      │ 0.6586               │
+└───────────────┴──────────────────────┘
+
 2_accelerator_disabled
 Dataset ready. Loaded: 7279 images.
 Epoch 1/6 avg_loss=0.8779 time=79.7s
