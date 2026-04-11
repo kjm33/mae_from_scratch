@@ -11,7 +11,7 @@ class TrainingLogger:
     """Handles all progress display, stats tracking, and profiling for a training run.
 
     Usage:
-        with TrainingLogger(accelerator, num_epochs, steps_per_epoch, profile_tag) as logger:
+        with TrainingLogger(device, num_epochs, steps_per_epoch, profile_tag) as logger:
             for epoch in range(num_epochs):
                 logger.begin_epoch(epoch)
                 for step, batch in enumerate(dataloader):
@@ -20,12 +20,11 @@ class TrainingLogger:
                 logger.end_epoch()
     """
 
-    def __init__(self, accelerator, num_epochs, steps_per_epoch, profile_tag):
-        self.accelerator = accelerator
+    def __init__(self, device, num_epochs, steps_per_epoch, profile_tag):
+        self.device = device
         self.num_epochs = num_epochs
         self.steps_per_epoch = steps_per_epoch
         self.profile_tag = profile_tag
-        self.is_main = accelerator.is_local_main_process
 
         self.console = Console()
         self._progress = None
@@ -59,7 +58,6 @@ class TrainingLogger:
             TextColumn("VRAM [yellow]{task.fields[vram]:.1f} GB"),
             TimeElapsedColumn(),
             console=self.console,
-            disable=not self.is_main,
         )
         self._progress.__enter__()
         self._task = self._progress.add_task(
@@ -72,8 +70,7 @@ class TrainingLogger:
         self._progress.__exit__(None, None, None)
         if self._prof is not None:
             self._prof.stop()
-        if self.is_main:
-            self._print_summary()
+        self._print_summary()
 
     # ------------------------------------------------------------------
     # per-epoch hooks
@@ -87,8 +84,6 @@ class TrainingLogger:
         self._progress.update(self._task, epoch=epoch + 1)
 
     def end_epoch(self, epoch):
-        if not self.is_main:
-            return
         avg_loss = self._epoch_loss / self._epoch_steps if self._epoch_steps else 0.0
         epoch_time = time.time() - self._epoch_start
         self.console.print(
@@ -107,10 +102,9 @@ class TrainingLogger:
         self.total_loss += loss_val
         self.total_steps += 1
 
-        if self.is_main:
-            vram_mb = torch.cuda.max_memory_allocated(self.accelerator.device) / 1024**2
-            self.max_vram_mb = max(self.max_vram_mb, vram_mb)
-            self._progress.update(self._task, advance=1, loss=loss_val, vram=vram_mb / 1024)
+        vram_mb = torch.cuda.max_memory_allocated(self.device) / 1024**2
+        self.max_vram_mb = max(self.max_vram_mb, vram_mb)
+        self._progress.update(self._task, advance=1, loss=loss_val, vram=vram_mb / 1024)
 
         self._step_profiler()
 
@@ -119,8 +113,6 @@ class TrainingLogger:
     # ------------------------------------------------------------------
 
     def _start_profiler(self):
-        if not self.is_main:
-            return
         self._prof = torch.profiler.profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),

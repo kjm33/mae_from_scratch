@@ -5,7 +5,6 @@ import cv2
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from accelerate import Accelerator
 
 from training_logger import TrainingLogger
 
@@ -71,7 +70,7 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
 
 
 def train():
-    accelerator = Accelerator(mixed_precision="bf16")
+    device = torch.device("cuda")
 
     model = MaskedAutoencoderViT(
         img_size=(32, 512),
@@ -83,7 +82,7 @@ def train():
         decoder_embed_dim=512,
         decoder_depth=8,
         norm_pix_loss=True,
-    )
+    ).to(device)
 
     lines_dir = "./data/yiddish_lines"
     dataset = YiddishSharedInRamDataset(lines_dir, img_size=(32, 512))
@@ -98,26 +97,23 @@ def train():
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05)
-
-    model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
-    # model = model.to(accelerator.device) # accelerator already loads the model into GPU
     model = torch.compile(model, mode="reduce-overhead")
 
     num_epochs = 10
     model.train()
 
-    with TrainingLogger(accelerator, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
+    with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
         for epoch in range(num_epochs):
             logger.begin_epoch(epoch)
 
             for step, batch in enumerate(dataloader):
-                batch = batch.to(accelerator.device, non_blocking=True)
-                batch = batch.to(torch.bfloat16).div_(255.0)
+                batch = batch.to(device, non_blocking=True).float().div_(255.0)
 
                 optimizer.zero_grad(set_to_none=True)
-                loss, _, _ = model(batch, mask_ratio=0.75) # high CPU usage - due to torch.compilation
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    loss, _, _ = model(batch, mask_ratio=0.75)
 
-                accelerator.backward(loss) # CPU peak
+                loss.backward()
                 optimizer.step()
 
                 logger.on_step(loss.item())
