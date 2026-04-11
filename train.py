@@ -96,7 +96,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05)
 
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
-    model = model.to(accelerator.device)
+    # model = model.to(accelerator.device) # accelerator already loads the model into GPU
     model = torch.compile(model, mode="reduce-overhead")
 
     model.train()
@@ -107,9 +107,10 @@ def train():
             batch = batch.to(torch.bfloat16).div_(255.0)
 
             optimizer.zero_grad(set_to_none=True)
-            loss, _, _ = model(batch, mask_ratio=0.75) # high CPU usage
+            loss, _, _ = model(batch, mask_ratio=0.75) # high CPU usage - due to torch.compilation
 
-            accelerator.backward(loss)
+
+            accelerator.backward(loss) # CPU peak
             optimizer.step()
 
 
