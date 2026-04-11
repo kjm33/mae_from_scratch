@@ -3,6 +3,7 @@ import time
 
 import cv2
 import torch
+from torch.profiler import ProfilerActivity, tensorboard_trace_handler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator
@@ -18,6 +19,8 @@ LOG_DIR = "runs/mae_yiddish"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
+
+TENSORBOARD_PROFILE = "1_inital_reference_version"
 
 
 def find_monitor_image(lines_dir):
@@ -101,6 +104,18 @@ def train():
 
     model.train()
 
+    prof = None
+    if accelerator.is_local_main_process:
+        prof = torch.profiler.profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
+            on_trace_ready=tensorboard_trace_handler(f"./runs/{TENSORBOARD_PROFILE}"),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+        prof.start()
+
     for epoch in range(10):
         for step, batch in enumerate(dataloader):
             batch = batch.to(accelerator.device, non_blocking=True)
@@ -109,9 +124,14 @@ def train():
             optimizer.zero_grad(set_to_none=True)
             loss, _, _ = model(batch, mask_ratio=0.75) # high CPU usage - due to torch.compilation
 
-
             accelerator.backward(loss) # CPU peak
             optimizer.step()
+
+            if prof is not None:
+                prof.step()
+                if step >= 4:  # wait(1) + warmup(1) + active(3) = 5 steps
+                    prof.stop()
+                    prof = None
 
 
 if __name__ == "__main__":
