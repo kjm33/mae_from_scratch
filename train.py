@@ -20,7 +20,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "1_inital_reference_version"
+TENSORBOARD_PROFILE = "2_accelerator_disabled"
 
 
 def find_monitor_image(lines_dir):
@@ -99,7 +99,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05)
     model = torch.compile(model, mode="reduce-overhead")
 
-    num_epochs = 10
+    num_epochs = 6
     model.train()
 
     with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:

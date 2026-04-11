@@ -1,6 +1,10 @@
 # Observations
 during trainig CPU usage is 100% on a single core
 
+# accelerator disabled
+first epoch took 79.7s comparing to 17.2s with accelerator
+^^ rebuilding torch.compile cache
+
 ● Here's a full line-by-line resource map:
 
   LINE(S)   | VRAM          | RAM           | CPU
