@@ -5,7 +5,8 @@ import cv2
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
+from torch import profiler
+from torch.profiler import ProfilerActivity, tensorboard_trace_handler
 import bitsandbytes as bnb
 from training_logger import TrainingLogger
 
@@ -21,7 +22,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "3_8_bit_optimizer"
+TENSORBOARD_PROFILE = "4_single_step"
 
 
 def find_monitor_image(lines_dir):
@@ -104,23 +105,57 @@ def train():
     num_epochs = 6
     model.train()
 
-    with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
-        for epoch in range(num_epochs):
-            logger.begin_epoch(epoch)
+   # with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
+    for epoch in range(num_epochs):
+        # logger.begin_epoch(epoch)
 
-            for step, batch in enumerate(dataloader):
-                batch = batch.to(device, non_blocking=True).float().div_(255.0)
+        for step, batch in enumerate(dataloader):
+            batch = batch.to(device, non_blocking=True).float().div_(255.0)
 
-                optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                loss, _, _ = model(batch, mask_ratio=0.75)
+
+            loss.backward()
+            optimizer.step()
+
+            # logger.on_step(loss.item())
+
+        # logger.end_epoch(epoch)
+
+    with torch.profiler.profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
+            on_trace_ready=tensorboard_trace_handler(f"./runs/{TENSORBOARD_PROFILE}"),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            acc_events=True,
+        ) as prof:
+            with profiler.record_function("train_step"):
+                torch.cuda.nvtx.range_push("forward")
+
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     loss, _, _ = model(batch, mask_ratio=0.75)
+                # end of forward
+                torch.cuda.nvtx.range_pop()
 
+                # Backward pass and optimization
+                torch.cuda.nvtx.range_push("backward")
                 loss.backward()
+
+                torch.cuda.nvtx.range_push("optimizer_step")
                 optimizer.step()
+                # end of optimizer_step
 
-                logger.on_step(loss.item())
+                torch.cuda.nvtx.range_pop()
+                optimizer.zero_grad()
+                # end of backward
+                torch.cuda.nvtx.range_pop()
 
-            logger.end_epoch(epoch)
+    
+
+        
 
 
 if __name__ == "__main__":
