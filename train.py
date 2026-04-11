@@ -3,13 +3,11 @@ import time
 
 import cv2
 import torch
-from torch.profiler import ProfilerActivity, tensorboard_trace_handler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn, SpinnerColumn
+
+from training_logger import TrainingLogger
 
 from mae import MaskedAutoencoderViT, YiddishSharedInRamDataset
 
@@ -74,7 +72,6 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
 
 def train():
     accelerator = Accelerator(mixed_precision="bf16")
-    console = Console()
 
     model = MaskedAutoencoderViT(
         img_size=(32, 512),
@@ -106,48 +103,12 @@ def train():
     # model = model.to(accelerator.device) # accelerator already loads the model into GPU
     model = torch.compile(model, mode="reduce-overhead")
 
+    num_epochs = 10
     model.train()
 
-    prof = None
-    if accelerator.is_local_main_process:
-        prof = torch.profiler.profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
-            on_trace_ready=tensorboard_trace_handler(f"./runs/{TENSORBOARD_PROFILE}"),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-            acc_events=True,
-        )
-        prof.start()
-
-    num_epochs = 10
-    train_start = time.time()
-    max_vram_mb = 0.0
-    total_loss = 0.0
-    total_steps = 0
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.fields[num_epochs]}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("loss [green]{task.fields[loss]:.4f}"),
-        TextColumn("VRAM [yellow]{task.fields[vram]:.1f} GB"),
-        TimeElapsedColumn(),
-        console=console,
-        disable=not accelerator.is_local_main_process,
-    ) as progress:
-        task = progress.add_task(
-            "train", total=len(dataloader),
-            epoch=1, num_epochs=num_epochs, loss=0.0, vram=0.0,
-        )
-
+    with TrainingLogger(accelerator, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
         for epoch in range(num_epochs):
-            progress.reset(task, total=len(dataloader))
-            progress.update(task, epoch=epoch + 1)
-            epoch_loss = 0.0
-            epoch_start = time.time()
+            logger.begin_epoch(epoch)
 
             for step, batch in enumerate(dataloader):
                 batch = batch.to(accelerator.device, non_blocking=True)
@@ -159,42 +120,9 @@ def train():
                 accelerator.backward(loss) # CPU peak
                 optimizer.step()
 
-                loss_val = loss.item()
-                epoch_loss += loss_val
-                total_loss += loss_val
-                total_steps += 1
+                logger.on_step(loss.item())
 
-                if accelerator.is_local_main_process:
-                    vram_mb = torch.cuda.max_memory_allocated(accelerator.device) / 1024**2
-                    max_vram_mb = max(max_vram_mb, vram_mb)
-                    progress.update(task, advance=1, loss=loss_val, vram=vram_mb / 1024)
-
-                if prof is not None:
-                    prof.step()
-                    if step >= 4:  # wait(1) + warmup(1) + active(3) = 5 steps
-                        prof.stop()
-                        prof = None
-
-            if accelerator.is_local_main_process:
-                epoch_time = time.time() - epoch_start
-                avg_loss = epoch_loss / (step + 1)
-                console.print(
-                    f"[bold]Epoch {epoch + 1}/{num_epochs}[/bold] "
-                    f"avg_loss=[green]{avg_loss:.4f}[/green] "
-                    f"time=[cyan]{epoch_time:.1f}s[/cyan]"
-                )
-
-    if accelerator.is_local_main_process:
-        elapsed = time.time() - train_start
-        table = Table(title=f"Training Summary — {TENSORBOARD_PROFILE}")
-        table.add_column("Metric", style="cyan", no_wrap=True)
-        table.add_column("Value", style="green")
-        table.add_row("Total time", f"{elapsed / 3600:.2f} h  ({elapsed:.0f} s)")
-        table.add_row("Total steps", str(total_steps))
-        table.add_row("Avg steps/sec", f"{total_steps / elapsed:.2f}")
-        table.add_row("Peak VRAM", f"{max_vram_mb / 1024:.2f} GB  ({max_vram_mb:.0f} MB)")
-        table.add_row("Avg loss", f"{total_loss / total_steps:.4f}")
-        console.print(table)
+            logger.end_epoch(epoch)
 
 
 if __name__ == "__main__":
