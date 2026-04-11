@@ -9,6 +9,10 @@ from accelerate import Accelerator
 
 from mae import MaskedAutoencoderViT, YiddishSharedInRamDataset
 
+_cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+os.makedirs(_cache_dir, exist_ok=True)
+os.environ["TORCHINDUCTOR_CACHE_DIR"] = _cache_dir
+
 IMG_SIZE = (32, 512)
 LOG_DIR = "runs/mae_yiddish"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
@@ -103,7 +107,7 @@ def train():
             batch = batch.to(torch.bfloat16).div_(255.0)
 
             optimizer.zero_grad(set_to_none=True)
-            loss, _, _ = model(batch, mask_ratio=0.75)
+            loss, _, _ = model(batch, mask_ratio=0.75) # high CPU usage
 
             accelerator.backward(loss)
             optimizer.step()
