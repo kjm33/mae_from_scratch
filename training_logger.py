@@ -1,4 +1,5 @@
 import time
+from contextlib import contextmanager
 
 import torch
 from torch.profiler import ProfilerActivity, tensorboard_trace_handler
@@ -18,6 +19,16 @@ class TrainingLogger:
                     # ... forward / backward / optimizer ...
                     logger.on_step(loss.item())
                 logger.end_epoch()
+
+            # After training, profile a single step with NVTX section annotations:
+            with logger.profile_step():
+                with logger.section("forward"):
+                    loss, _, _ = model(batch)
+                with logger.section("backward"):
+                    loss.backward()
+                with logger.section("optimizer_step"):
+                    optimizer.step()
+                    optimizer.zero_grad()
     """
 
     def __init__(self, device, num_epochs, steps_per_epoch, profile_tag):
@@ -131,6 +142,43 @@ class TrainingLogger:
         if self.total_steps >= 5:  # wait(1) + warmup(1) + active(3)
             self._prof.stop()
             self._prof = None
+
+    # ------------------------------------------------------------------
+    # single-step profiling with NVTX section annotations
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def profile_step(self):
+        """Profile a single training step. Wrap the step body in this context manager.
+
+        The profiler records CPU + CUDA activity, shapes, memory, and call stacks,
+        and writes the trace to ``./runs/<profile_tag>/``.
+        Use ``section()`` inside to annotate forward / backward / optimizer phases.
+        """
+        self.console.print("[bold cyan]Profiling single step...[/bold cyan]")
+        prof = torch.profiler.profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            on_trace_ready=tensorboard_trace_handler(f"./runs/{self.profile_tag}"),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            acc_events=True,
+        )
+        with prof:
+            with torch.profiler.record_function("train_step"):
+                yield
+        self.console.print(
+            f"[bold green]Trace saved to ./runs/{self.profile_tag}/[/bold green]"
+        )
+
+    @contextmanager
+    def section(self, name: str):
+        """Mark an NVTX range visible in the profiler trace and TensorBoard."""
+        torch.cuda.nvtx.range_push(name)
+        try:
+            yield
+        finally:
+            torch.cuda.nvtx.range_pop()
 
     def _print_summary(self):
         elapsed = time.time() - self.train_start
