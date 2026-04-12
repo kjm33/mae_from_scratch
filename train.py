@@ -96,7 +96,18 @@ def train():
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05, fused=True)
-    model = torch.compile(model, mode="reduce-overhead")
+
+    # Compile the full training step (forward + backward + optimizer) into a single
+    # CUDA graph so the optimizer kernel launches are captured too, eliminating
+    # per-parameter dispatch overhead.
+    @torch.compile(mode="reduce-overhead")
+    def train_step(batch):
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            loss, _, _ = model(batch, mask_ratio=0.75)
+        loss.backward()
+        optimizer.step()
+        return loss
 
     num_epochs = 6
     model.train()
@@ -107,14 +118,7 @@ def train():
 
             for step, batch in enumerate(dataloader):
                 batch = batch.to(device, non_blocking=True).float().div_(255.0)
-
-                optimizer.zero_grad(set_to_none=True)
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss, _, _ = model(batch, mask_ratio=0.75)
-
-                loss.backward()
-                optimizer.step()
-
+                loss = train_step(batch)
                 logger.on_step(loss.item())
 
             logger.end_epoch(epoch)
