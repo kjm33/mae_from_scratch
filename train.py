@@ -83,8 +83,7 @@ def train():
         norm_pix_loss=True,
     ).to(device)
 
-    lines_dir = "./data/yiddish_lines"
-    dataloader = build_dali_loader(lines_dir, img_size=(32, 512), batch_size=256, num_threads=4)
+    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=256, num_threads=4)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05, fused=True)
 

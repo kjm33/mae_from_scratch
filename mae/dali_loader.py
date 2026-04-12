@@ -1,57 +1,50 @@
-import os
-
+import numpy as np
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
 from nvidia.dali.pipeline import pipeline_def
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 
-VALID_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.tiff', '.tif')
 
+def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
+    """Build a DALI data pipeline backed by a pre-processed numpy memmap file.
 
-def build_dali_loader(root_dir, img_size=(32, 512), batch_size=256, num_threads=4, device_id=0):
-    """Build a DALI data pipeline for grayscale text-line images.
-
-    Reads images from disk, GPU-decodes them, resizes to img_size, and normalizes
-    to [0, 1] float32. Returns a DALIGenericIterator that yields dicts with key
-    "images" containing tensors of shape (N, 1, H, W) already on GPU.
+    Expects npy_path to be a (N, H, W) uint8 array produced by prepare_dataset.py.
+    Returns a DALIGenericIterator yielding dicts with key "images" containing
+    tensors of shape (N, 1, H, W) float32 in [0, 1], already on GPU.
 
     Args:
-        root_dir:    Directory containing image files.
-        img_size:    Target (H, W). Default (32, 512).
+        npy_path:    Path to the .npy file produced by prepare_dataset.py.
         batch_size:  Samples per batch.
-        num_threads: CPU threads for prefetch/decode.
+        num_threads: CPU threads for the external source callback.
         device_id:   GPU index.
     """
-    if not os.path.exists(root_dir):
-        raise FileNotFoundError(f"Path does not exist: {os.path.abspath(root_dir)}")
+    data = np.load(npy_path, mmap_mode='r')   # (N, H, W) uint8, memory-mapped
+    n = len(data)
+    print(f"DALI pipeline: {n} images from {npy_path}  (memmap, no per-epoch decode)")
 
-    file_list = sorted(
-        os.path.join(root_dir, f)
-        for f in os.listdir(root_dir)
-        if f.lower().endswith(VALID_EXTENSIONS)
-    )
-    if not file_list:
-        raise ValueError(
-            f"No images found in: {os.path.abspath(root_dir)}. "
-            f"Supported extensions: {VALID_EXTENSIONS}"
-        )
+    # Pre-shuffle index array; DALI external_source handles epoch-level reshuffling
+    # by passing a new permutation each time the iterator resets.
+    rng = np.random.default_rng()
 
-    print(f"DALI pipeline: {len(file_list)} images from {root_dir}")
+    def source(sample_info):
+        if sample_info.iteration == 0 and sample_info.idx_in_epoch == 0:
+            # New epoch — reshuffle
+            source._perm = rng.permutation(n)
+        idx = source._perm[sample_info.idx_in_epoch + sample_info.iteration * batch_size]
+        # Return (H, W, 1) uint8 so DALI treats it as a single-channel HWC image
+        return data[idx, :, :, np.newaxis].copy()
 
-    h, w = img_size
+    source._perm = rng.permutation(n)
 
     @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id)
     def _pipeline():
-        encoded, _ = fn.readers.file(
-            files=file_list,
-            shuffle_after_epoch=True,
-            name="Reader",
+        images = fn.external_source(
+            source=source,
+            num_outputs=1,
+            dtype=types.UINT8,
+            layout="HWC",
         )
-        # Mixed device: CPU decode start -> GPU decode finish (faster than pure CPU)
-        images = fn.decoders.image(encoded, device="mixed", output_type=types.GRAY)
-        images = fn.resize(images, device="gpu", resize_y=h, resize_x=w,
-                           interp_type=types.INTERP_LINEAR)
-        # Normalize to [0, 1], convert HWC -> CHW, cast to float32
+        images = images.gpu()
         images = fn.crop_mirror_normalize(
             images,
             device="gpu",
@@ -70,4 +63,5 @@ def build_dali_loader(root_dir, img_size=(32, 512), batch_size=256, num_threads=
         output_map=["images"],
         last_batch_policy=LastBatchPolicy.DROP,
         auto_reset=True,
+        size=n,
     )
