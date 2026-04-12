@@ -99,8 +99,10 @@ def train():
 
     # Compile the full training step (forward + backward + optimizer) into a single
     # CUDA graph so the optimizer kernel launches are captured too, eliminating
-    # per-parameter dispatch overhead.
-    @torch.compile(mode="reduce-overhead")
+    # per-parameter dispatch overhead. max-autotune benchmarks multiple kernel
+    # implementations (GEMM tilings, Triton configs) and picks the fastest —
+    # longer first-step compile, but results are cached in .cache/.
+    @torch.compile(mode="max-autotune")
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
