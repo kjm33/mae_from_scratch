@@ -17,8 +17,8 @@ class TrainingLogger:
                 logger.begin_epoch(epoch)
                 for step, batch in enumerate(dataloader):
                     # ... forward / backward / optimizer ...
-                    logger.on_step(loss.item())
-                logger.end_epoch()
+                    logger.on_step()
+                logger.end_epoch(epoch, avg_loss)
 
             # After training, profile a single step with NVTX section annotations:
             with logger.profile_step():
@@ -47,10 +47,8 @@ class TrainingLogger:
         self.max_vram_mb = 0.0
         self.total_loss = 0.0
         self.total_steps = 0
+        self.total_epochs = 0
 
-        # per-epoch state
-        self._epoch_loss = 0.0
-        self._epoch_steps = 0
         self._epoch_start = None
 
     # ------------------------------------------------------------------
@@ -88,15 +86,15 @@ class TrainingLogger:
     # ------------------------------------------------------------------
 
     def begin_epoch(self, epoch):
-        self._epoch_loss = 0.0
-        self._epoch_steps = 0
         self._epoch_start = time.time()
         self._progress.reset(self._task, total=self.steps_per_epoch)
         self._progress.update(self._task, epoch=epoch + 1)
 
-    def end_epoch(self, epoch):
-        avg_loss = self._epoch_loss / self._epoch_steps if self._epoch_steps else 0.0
+    def end_epoch(self, epoch, avg_loss: float):
+        self.total_loss += avg_loss
+        self.total_epochs += 1
         epoch_time = time.time() - self._epoch_start
+        self._progress.update(self._task, loss=avg_loss)
         self.console.print(
             f"[bold]Epoch {epoch + 1}/{self.num_epochs}[/bold] "
             f"avg_loss=[green]{avg_loss:.4f}[/green] "
@@ -107,15 +105,12 @@ class TrainingLogger:
     # per-step hook
     # ------------------------------------------------------------------
 
-    def on_step(self, loss_val):
-        self._epoch_loss += loss_val
-        self._epoch_steps += 1
-        self.total_loss += loss_val
+    def on_step(self):
         self.total_steps += 1
 
         vram_mb = torch.cuda.max_memory_allocated(self.device) / 1024**2
         self.max_vram_mb = max(self.max_vram_mb, vram_mb)
-        self._progress.update(self._task, advance=1, loss=loss_val, vram=vram_mb / 1024)
+        self._progress.update(self._task, advance=1, vram=vram_mb / 1024)
 
         self._step_profiler()
 
@@ -189,5 +184,5 @@ class TrainingLogger:
         table.add_row("Total steps", str(self.total_steps))
         table.add_row("Avg steps/sec", f"{self.total_steps / elapsed:.2f}")
         table.add_row("Peak VRAM", f"{self.max_vram_mb / 1024:.2f} GB  ({self.max_vram_mb:.0f} MB)")
-        table.add_row("Avg loss", f"{self.total_loss / self.total_steps:.4f}" if self.total_steps else "n/a")
+        table.add_row("Avg loss", f"{self.total_loss / self.total_epochs:.4f}" if self.total_epochs else "n/a")
         self.console.print(table)

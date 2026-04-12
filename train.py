@@ -120,13 +120,16 @@ def train():
     with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
         for epoch in range(num_epochs):
             logger.begin_epoch(epoch)
+            epoch_loss = torch.zeros(1, device=device)
 
             for step, batch in enumerate(dataloader):
                 batch = batch.to(device, non_blocking=True).float().div_(255.0)
                 loss = train_step(batch)
-                logger.on_step(loss.item())
+                epoch_loss += loss.detach()
+                logger.on_step()
 
-            logger.end_epoch(epoch)
+            avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
+            logger.end_epoch(epoch, avg_loss)
 
         # Profile a single compiled step — record_function annotations inside
         # train_step are preserved by torch.compile and visible in the trace.
