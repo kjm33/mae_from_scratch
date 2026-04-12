@@ -5,7 +5,6 @@ import cv2
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import bitsandbytes as bnb
 from training_logger import TrainingLogger
 
 from mae import MaskedAutoencoderViT, YiddishSharedInRamDataset
@@ -96,8 +95,7 @@ def train():
         prefetch_factor=4,
     )
 
-    #from https://medium.com/@jiminlee-ai/why-your-tiny-deep-learning-model-is-hogging-all-your-gpu-vram-85bc58ee5050
-    optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=1.5e-4, weight_decay=0.05)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05, fused=True)
     model = torch.compile(model, mode="reduce-overhead")
 
     num_epochs = 6
