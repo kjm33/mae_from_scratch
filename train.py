@@ -19,7 +19,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "4_single_step"
+TENSORBOARD_PROFILE = "5_optimizer_fused_and_compiled"
 
 
 def find_monitor_image(lines_dir):
@@ -105,10 +105,13 @@ def train():
     @torch.compile(mode="max-autotune")
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            loss, _, _ = model(batch, mask_ratio=0.75)
-        loss.backward()
-        optimizer.step()
+        with torch.profiler.record_function("forward"):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                loss, _, _ = model(batch, mask_ratio=0.75)
+        with torch.profiler.record_function("backward"):
+            loss.backward()
+        with torch.profiler.record_function("optimizer_step"):
+            optimizer.step()
         return loss
 
     num_epochs = 6
@@ -125,18 +128,10 @@ def train():
 
             logger.end_epoch(epoch)
 
-        # Profile a single step after training with NVTX section annotations
+        # Profile a single compiled step — record_function annotations inside
+        # train_step are preserved by torch.compile and visible in the trace.
         with logger.profile_step():
-            with logger.section("forward"):
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss, _, _ = model(batch, mask_ratio=0.75)
-
-            with logger.section("backward"):
-                loss.backward()
-
-            with logger.section("optimizer_step"):
-                optimizer.step()
-                optimizer.zero_grad()
+            train_step(batch)
 
 
 if __name__ == "__main__":
