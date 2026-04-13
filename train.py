@@ -1,8 +1,17 @@
 import os
 import time
 
+# Suppress TensorFlow/absl noise (imported transitively by TensorBoard)
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+
+import logging
+
 import cv2
 import torch
+
+# torch.compile can't trace profiler record_function annotations — expected, not a bug
+logging.getLogger("torch._dynamo.variables.torch").setLevel(logging.ERROR)
 from torch.utils.tensorboard import SummaryWriter
 from training_logger import TrainingLogger
 

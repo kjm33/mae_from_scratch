@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
@@ -26,15 +28,18 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
     # by passing a new permutation each time the iterator resets.
     rng = np.random.default_rng()
 
+    # Number of complete batches per epoch (DROP policy)
+    epoch_size = (n // batch_size) * batch_size
+
     def source(sample_info):
-        # idx_in_epoch is already the global sample position within the epoch;
-        # modulo guards against DALI prefetch calls at epoch boundaries.
-        pos = sample_info.idx_in_epoch % n
-        if pos == 0:
+        if sample_info.idx_in_epoch >= epoch_size:
+            # Signal end-of-epoch; DALI will stop and auto-reset
+            raise StopIteration
+        if sample_info.idx_in_epoch == 0:
             # New epoch — reshuffle
             source._perm = rng.permutation(n)
         # Return (H, W, 1) uint8 so DALI treats it as a single-channel HWC image
-        return data[source._perm[pos], :, :, np.newaxis].copy()
+        return data[source._perm[sample_info.idx_in_epoch], :, :, np.newaxis].copy()
 
     source._perm = rng.permutation(n)
 
@@ -60,10 +65,15 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
     pipe = _pipeline()
     pipe.build()
 
-    return DALIGenericIterator(
-        pipe,
-        output_map=["images"],
-        last_batch_policy=LastBatchPolicy.DROP,
-        auto_reset=True,
-        size=n,
-    )
+    # reader_name is the new API but only applies to file readers, not external_source.
+    # size= is the only way to give DALIGenericIterator a correct len(); suppress the
+    # inapplicable deprecation warning.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Please set `reader_name`")
+        return DALIGenericIterator(
+            pipe,
+            output_map=["images"],
+            last_batch_policy=LastBatchPolicy.DROP,
+            auto_reset=True,
+            size=epoch_size,
+        )
