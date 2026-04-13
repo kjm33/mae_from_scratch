@@ -27,12 +27,14 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
     rng = np.random.default_rng()
 
     def source(sample_info):
-        if sample_info.iteration == 0 and sample_info.idx_in_epoch == 0:
+        # idx_in_epoch is already the global sample position within the epoch;
+        # modulo guards against DALI prefetch calls at epoch boundaries.
+        pos = sample_info.idx_in_epoch % n
+        if pos == 0:
             # New epoch — reshuffle
             source._perm = rng.permutation(n)
-        idx = source._perm[sample_info.idx_in_epoch + sample_info.iteration * batch_size]
         # Return (H, W, 1) uint8 so DALI treats it as a single-channel HWC image
-        return data[idx, :, :, np.newaxis].copy()
+        return data[source._perm[pos], :, :, np.newaxis].copy()
 
     source._perm = rng.permutation(n)
 
@@ -40,7 +42,7 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
     def _pipeline():
         images = fn.external_source(
             source=source,
-            num_outputs=1,
+            batch=False,
             dtype=types.UINT8,
             layout="HWC",
         )

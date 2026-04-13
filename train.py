@@ -19,7 +19,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "6_take_loss_once_per_epoch"
+TENSORBOARD_PROFILE = "7_dali_loader"
 
 
 def find_monitor_image(lines_dir):
