@@ -1,3 +1,4 @@
+import argparse
 import os
 import time
 
@@ -28,7 +29,6 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "9_ultra_light_model"
 
 
 def find_monitor_image(lines_dir):
@@ -77,7 +77,7 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
     writer.add_image("monitor/reconstructed", r, epoch, dataformats="CHW")
 
 
-def train():
+def train(profile: str | None = None):
     device = torch.device("cuda")
 
     model = mae_vit_ultra_light().to(device)
@@ -106,7 +106,7 @@ def train():
     num_epochs = 6
     model.train()
 
-    with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
+    with TrainingLogger(device, num_epochs, len(dataloader), profile) as logger:
         for epoch in range(num_epochs):
             logger.begin_epoch(epoch)
             epoch_loss = torch.zeros(1, device=device)
@@ -120,11 +120,13 @@ def train():
             avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
             logger.end_epoch(epoch, avg_loss)
 
-        # Profile a single compiled step — record_function annotations inside
-        # train_step are preserved by torch.compile and visible in the trace.
-        with logger.profile_step():
-            train_step(batch)
+        if profile:
+            with logger.profile_step():
+                train_step(batch)
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", default=None, help="Profile name — captures a trace to runs/<name>_<timestamp>.pt.trace.json")
+    args = parser.parse_args()
+    train(profile=args.profile)

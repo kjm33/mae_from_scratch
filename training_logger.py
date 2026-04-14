@@ -121,6 +121,9 @@ class TrainingLogger:
         and writes the trace to ``./runs/<profile_tag>/``.
         Use ``section()`` inside to annotate forward / backward / optimizer phases.
         """
+        if not self.profile_tag:
+            yield
+            return
         ts = datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
         output_path = f"./runs/{self.profile_tag}_{ts}.pt.trace.json"
         self.console.print("[bold cyan]Profiling single step...[/bold cyan]")
