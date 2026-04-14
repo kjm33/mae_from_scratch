@@ -40,7 +40,6 @@ class TrainingLogger:
         self.console = Console()
         self._progress = None
         self._task = None
-        self._prof = None
 
         # cumulative stats
         self.train_start = None
@@ -57,7 +56,6 @@ class TrainingLogger:
 
     def __enter__(self):
         self.train_start = time.time()
-        self._start_profiler()
         self._progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.fields[num_epochs]}"),
@@ -77,8 +75,6 @@ class TrainingLogger:
 
     def __exit__(self, *_):
         self._progress.__exit__(None, None, None)
-        if self._prof is not None:
-            self._prof.stop()
         self._print_summary()
 
     # ------------------------------------------------------------------
@@ -111,32 +107,6 @@ class TrainingLogger:
         vram_mb = torch.cuda.max_memory_allocated(self.device) / 1024**2
         self.max_vram_mb = max(self.max_vram_mb, vram_mb)
         self._progress.update(self._task, advance=1, vram=vram_mb / 1024)
-
-        self._step_profiler()
-
-    # ------------------------------------------------------------------
-    # internal helpers
-    # ------------------------------------------------------------------
-
-    def _start_profiler(self):
-        self._prof = torch.profiler.profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
-            on_trace_ready=tensorboard_trace_handler(f"./runs/{self.profile_tag}"),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-            acc_events=True,
-        )
-        self._prof.start()
-
-    def _step_profiler(self):
-        if self._prof is None:
-            return
-        self._prof.step()
-        if self.total_steps >= 5:  # wait(1) + warmup(1) + active(3)
-            self._prof.stop()
-            self._prof = None
 
     # ------------------------------------------------------------------
     # single-step profiling with NVTX section annotations
