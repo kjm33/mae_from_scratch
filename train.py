@@ -1,13 +1,22 @@
 import os
 import time
 
+# Suppress TensorFlow/absl noise (imported transitively by TensorBoard)
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+
+import logging
+
 import cv2
 import torch
-from torch.utils.data import DataLoader
+
+# torch.compile can't trace profiler record_function annotations — expected, not a bug
+logging.getLogger("torch._dynamo.variables.torch").setLevel(logging.ERROR)
 from torch.utils.tensorboard import SummaryWriter
 from training_logger import TrainingLogger
 
-from mae import MaskedAutoencoderViT, YiddishSharedInRamDataset
+from mae import MaskedAutoencoderViT
+from mae.dali_loader import build_dali_loader
 
 _cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
 os.makedirs(_cache_dir, exist_ok=True)
@@ -19,7 +28,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "6_take_loss_once_per_epoch"
+TENSORBOARD_PROFILE = "7_dali_loader"
 
 
 def find_monitor_image(lines_dir):
@@ -83,17 +92,7 @@ def train():
         norm_pix_loss=True,
     ).to(device)
 
-    lines_dir = "./data/yiddish_lines"
-    dataset = YiddishSharedInRamDataset(lines_dir, img_size=(32, 512))
-    dataloader = DataLoader(
-        dataset,
-        batch_size=256,
-        shuffle=True,
-        num_workers=6,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4,
-    )
+    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=256, num_threads=4)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05, fused=True)
 
@@ -122,8 +121,8 @@ def train():
             logger.begin_epoch(epoch)
             epoch_loss = torch.zeros(1, device=device)
 
-            for step, batch in enumerate(dataloader):
-                batch = batch.to(device, non_blocking=True).float().div_(255.0)
+            for step, batch_data in enumerate(dataloader):
+                batch = batch_data[0]["images"]  # (N, 1, H, W) float32 on GPU
                 loss = train_step(batch)
                 epoch_loss += loss.detach()
                 logger.on_step()

@@ -1,3 +1,23 @@
+Epoch 1/6 avg_loss=0.9005 time=25.9s
+Epoch 2/6 avg_loss=0.6295 time=11.7s
+Epoch 3/6 avg_loss=0.6189 time=11.8s
+Epoch 4/6 avg_loss=0.6064 time=11.9s
+Epoch 5/6 avg_loss=0.5991 time=11.9s
+Epoch 6/6 avg_loss=0.5943 time=12.0s
+Profiling single step...
+Trace saved to ./runs/7_dali_loader/
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 28/28 loss 0.5943 VRAM 16.6 GB 0:00:10
+    Training Summary — 7_dali_loader
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value                ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.02 h  (86 s)       │
+│ Total steps   │ 168                  │
+│ Avg steps/sec │ 1.96                 │
+│ Peak VRAM     │ 16.56 GB  (16963 MB) │
+│ Avg loss      │ 0.6581               │
+└───────────────┴──────────────────────┘
+
 Dataset ready. Loaded: 7279 images.
 Epoch 1/6 avg_loss=0.9056 time=18.5s
 Epoch 2/6 avg_loss=0.6270 time=12.6s
