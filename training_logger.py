@@ -1,8 +1,9 @@
 import time
 from contextlib import contextmanager
+from datetime import datetime
 
 import torch
-from torch.profiler import ProfilerActivity, tensorboard_trace_handler
+from torch.profiler import ProfilerActivity
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn, SpinnerColumn
@@ -120,10 +121,12 @@ class TrainingLogger:
         and writes the trace to ``./runs/<profile_tag>/``.
         Use ``section()`` inside to annotate forward / backward / optimizer phases.
         """
+        ts = datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+        output_path = f"./runs/{self.profile_tag}_{ts}.pt.trace.json"
         self.console.print("[bold cyan]Profiling single step...[/bold cyan]")
         prof = torch.profiler.profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            on_trace_ready=tensorboard_trace_handler(f"./runs/{self.profile_tag}"),
+            on_trace_ready=lambda p: p.export_chrome_trace(output_path),
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
@@ -132,9 +135,7 @@ class TrainingLogger:
         with prof:
             with torch.profiler.record_function("train_step"):
                 yield
-        self.console.print(
-            f"[bold green]Trace saved to ./runs/{self.profile_tag}/[/bold green]"
-        )
+        self.console.print(f"[bold green]Trace saved to {output_path}[/bold green]")
 
     @contextmanager
     def section(self, name: str):
