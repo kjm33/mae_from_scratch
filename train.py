@@ -15,7 +15,7 @@ logging.getLogger("torch._dynamo.variables.torch").setLevel(logging.ERROR)
 from torch.utils.tensorboard import SummaryWriter
 from training_logger import TrainingLogger
 
-from mae import MaskedAutoencoderViT
+from mae import MaskedAutoencoderViT, mae_vit_ultra_light
 from mae.dali_loader import build_dali_loader
 
 _cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
@@ -28,7 +28,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "8_changing_path_to_32x8"
+TENSORBOARD_PROFILE = "9_ultra_light_model"
 
 
 def find_monitor_image(lines_dir):
@@ -80,17 +80,7 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
 def train():
     device = torch.device("cuda")
 
-    model = MaskedAutoencoderViT(
-        img_size=(32, 512),
-        patch_size=(32, 8),
-        in_chans=1,
-        embed_dim=768,
-        depth=12,
-        num_heads=12,
-        decoder_embed_dim=512,
-        decoder_depth=8,
-        norm_pix_loss=True,
-    ).to(device)
+    model = mae_vit_ultra_light().to(device)
 
     dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=256, num_threads=4)
 

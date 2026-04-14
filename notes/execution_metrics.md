@@ -1,3 +1,25 @@
+DALI pipeline: 7279 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
+Epoch 1/6 avg_loss=0.9564 time=12.8s
+Epoch 2/6 avg_loss=0.7597 time=0.3s
+Epoch 3/6 avg_loss=0.7441 time=0.3s
+Epoch 4/6 avg_loss=0.7409 time=0.3s
+Epoch 5/6 avg_loss=0.7355 time=0.3s
+Epoch 6/6 avg_loss=0.7299 time=0.3s
+Profiling single step...
+Trace saved to ./runs/9_ultra_light_model_2026_04_14__19_09_42.pt.trace.json
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 28/28 loss 0.7299 VRAM 0.5 GB 0:00:00
+         Training Summary —
+         9_ultra_light_model
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value             ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.00 h  (14 s)    │
+│ Total steps   │ 168               │
+│ Avg steps/sec │ 11.73             │
+│ Peak VRAM     │ 0.52 GB  (533 MB) │
+│ Avg loss      │ 0.7777            │
+└───────────────┴───────────────────┘
+
 Epoch 1/6 avg_loss=0.8703 time=230.1s
 Epoch 2/6 avg_loss=0.7405 time=3.4s
 Epoch 3/6 avg_loss=0.7384 time=3.4s

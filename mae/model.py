@@ -339,10 +339,17 @@ def mae_vit_base_patch32x8_32x512(**kwargs):
         norm_pix_loss=True, **kwargs)
 
 def mae_vit_ultra_light(**kwargs):
-    """MAE for Yiddish text/grayscale: img 32x512, patch (32h,8w), 1 channel, ViT-Base."""
+    """MAE for Yiddish text/grayscale: img 32x512, patch (32h,8w), 1 channel, ViT-Tiny?."""
     return MaskedAutoencoderViT(
-        img_size=(32, 512), patch_size=(32, 8), in_chans=1,
-        embed_dim=768, depth=12, num_heads=12,
-        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        img_size=(32, 512),
+        patch_size=(32, 8),
+        in_chans=1,
+        embed_dim=256,
+        depth=6,
+        num_heads=4,
+        decoder_embed_dim=128,
+        decoder_depth=2,
+        decoder_num_heads=8,
+        mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
         norm_pix_loss=True, **kwargs)
