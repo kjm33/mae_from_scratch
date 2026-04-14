@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Masked Autoencoder (MAE) for self-supervised pretraining on Yiddish OCR text-line images. Grayscale 32x512px images, ViT-Base encoder with patch size 8. Based on *Masked Autoencoders Are Scalable Vision Learners* (He et al., 2022).
+Masked Autoencoder (MAE) for self-supervised pretraining on Yiddish OCR text-line images. Grayscale 32x512px images, ViT-Base encoder with patch size (32h, 8w). Based on *Masked Autoencoders Are Scalable Vision Learners* (He et al., 2022).
 
 ## Training
 
@@ -14,14 +14,18 @@ python prepare_dataset.py
 
 # Single GPU
 python train.py
+
+# With PyTorch profiler — captures one post-training step to runs/<name>_<timestamp>.pt.trace.json
+python train.py --profile <name>
+
+# With Nsight Systems profiler — captures full run to nsys/<name>.nsys-rep
+./profile_nsys.sh <name>
 ```
 
-Training config is in `train.py` (no argparse). Dataset images go in `./data/yiddish_lines/`.
+Training config is in `train.py`. Dataset images go in `./data/yiddish_lines/`.
 The prepared memmap is written to `./data/yiddish_lines.npy`.
 
 TensorBoard: `tensorboard --logdir ./runs/mae_yiddish`
-
-Profiler traces: `tensorboard --logdir ./runs/<TENSORBOARD_PROFILE>`
 
 ## Architecture
 
@@ -35,21 +39,31 @@ train.py              # training entry point (torch.compile + torch.autocast bf1
 prepare_dataset.py    # one-time script: decode + resize images → ./data/yiddish_lines.npy
 training_logger.py    # TrainingLogger — rich progress bar, VRAM tracking, profiler, summary
 analyze_trace.py      # CLI tool: analyze PyTorch profiler .pt.trace.json files
+analyze_nsys.py       # CLI tool: analyze Nsight Systems .nsys-rep / .sqlite files
+profile_nsys.sh       # wrapper: runs training under nsys, saves to nsys/<name>.nsys-rep
 ```
 
 **MAE flow:** image -> patch embed -> random mask 75% -> encode visible patches only -> decoder re-inserts mask tokens -> reconstruct full image -> MSE loss on masked patches only.
 
 **FlashAttention** wraps `F.scaled_dot_product_attention` and is injected into timm `Block` via `attn_layer=FlashAttention`.
 
-**Factory functions** in `mae/model.py`: `mae_vit_base_patch16`, `mae_vit_large_patch16`, `mae_vit_huge_patch14`, `mae_vit_base_patch8_32x512` (Yiddish config).
+**Factory functions** in `mae/model.py`: `mae_vit_base_patch16`, `mae_vit_large_patch16`, `mae_vit_huge_patch14`, `mae_vit_base_patch32x8_32x512`, `mae_vit_ultra_slim` (current Yiddish config).
+
+**Rectangular patch support** — `patch_size` accepts a `(ph, pw)` tuple throughout `MaskedAutoencoderViT` (`patchify`, `unpatchify`, `decoder_pred`, `_grid_size` all use `ph`/`pw` separately).
 
 **Mixed precision** via `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` — runs matmuls/convs in bf16, keeps numerically sensitive ops (softmax, layer norm, loss) in fp32 automatically.
 
 ## Key Hyperparameters
 
+- **patch_size=(32, 8)** — full-height column patches; grid is (1, 64) for 32×512 images
 - **mask_ratio=0.75** (75% patches masked, 25% visible to encoder)
 - **norm_pix_loss=True** normalizes target patches to zero-mean unit-variance before MSE
 - **batch_size=256**, **lr=1.5e-4**, **weight_decay=0.05**
+
+## Current Model — `mae_vit_ultra_slim`
+
+embed_dim=256, depth=6, num_heads=4, decoder_embed_dim=128, decoder_depth=2, patch_size=(32,8).
+108 learnable parameters groups. ~10ms GPU per step.
 
 ## Data Pipeline
 
@@ -69,18 +83,39 @@ cost is paid once, not every epoch.
 `TrainingLogger` in `training_logger.py` separates all visualization from training logic. Interface:
 
 ```python
-with TrainingLogger(device, num_epochs, len(dataloader), TENSORBOARD_PROFILE) as logger:
+with TrainingLogger(device, num_epochs, len(dataloader), profile) as logger:
     logger.begin_epoch(epoch)          # resets progress bar
-    logger.on_step()                   # advances bar, tracks VRAM, steps profiler
+    logger.on_step()                   # advances bar, tracks VRAM
     logger.end_epoch(epoch, avg_loss)  # syncs loss once, prints epoch summary
+
+if profile:
+    with logger.profile_step():        # captures one step → runs/<profile>_<timestamp>.pt.trace.json
+        train_step(batch)
 ```
 
 Loss is accumulated on GPU across steps (`epoch_loss += loss.detach()`) and synced to CPU
 once per epoch via `.item()` — avoids per-step `cudaStreamSynchronize`.
 
-Tracks: rich live progress bar, per-epoch summaries, peak VRAM, avg loss, steps/sec. Profiler runs for first 5 steps only (wait=1, warmup=1, active=3) then stops automatically.
+Tracks: rich live progress bar, per-epoch summaries, peak VRAM, avg loss, steps/sec.
 
-Set `TENSORBOARD_PROFILE` in `train.py` to a unique name per experiment to compare runs side-by-side in TensorBoard.
+## Profiling
+
+Two complementary tools:
+
+**PyTorch profiler** (`--profile <name>`): captures one post-training step. Output in
+`runs/<name>_<timestamp>.pt.trace.json`. Analyze with:
+```bash
+python analyze_trace.py runs/<name>_<timestamp>.pt.trace.json
+```
+
+**Nsight Systems** (`./profile_nsys.sh <name>`): captures the full training run. Output in
+`nsys/<name>.nsys-rep`. Analyze with:
+```bash
+python analyze_nsys.py nsys/<name>.nsys-rep
+```
+`analyze_nsys.py` reads the SQLite export directly — sections: GPU device info, kernel summary
+by type, GPU utilization/density, CUDA runtime API (syncs, launches, graph launches), NVTX
+ranges (DALI pipeline stages), memory ops, bottleneck detection.
 
 ## Performance
 
@@ -90,8 +125,10 @@ Target: RTX 3090 (24GB). Optimizations:
 - **Full train_step compiled** — `zero_grad` + forward + backward + optimizer captured into two CUDA graphs; CPU only fires two `cudaGraphLaunch` calls per step (~1ms total CPU overhead)
 - **`torch.profiler.record_function`** annotations inside `train_step` — preserved by `torch.compile`, visible in TensorBoard trace; zero overhead when profiler is inactive
 - **FlashAttention** via SDPA
-- **DALI memmap pipeline** — no per-epoch decode/resize; GPU kernel density 99.7%
+- **DALI memmap pipeline** — no per-epoch decode/resize
 - **Loss sync once per epoch** — eliminates per-step `cudaStreamSynchronize`
 - **Fused AdamW** (`fused=True`) — single `multi_tensor_apply_kernel` over all parameters
 
-Steady-state step: ~197ms GPU, two CUDA graph launches, 99.7% kernel density.
+`mae_vit_ultra_slim` steady-state: ~10ms GPU per step, 98.5% kernel density (single-step trace),
+two CUDA graph launches. Triton fused kernels dominate (44%), FlashAttention backward 15%,
+optimizer 10%.
