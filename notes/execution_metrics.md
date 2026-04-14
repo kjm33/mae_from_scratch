@@ -1,3 +1,24 @@
+Epoch 1/6 avg_loss=0.8703 time=230.1s
+Epoch 2/6 avg_loss=0.7405 time=3.4s
+Epoch 3/6 avg_loss=0.7384 time=3.4s
+Epoch 4/6 avg_loss=0.7376 time=3.4s
+Epoch 5/6 avg_loss=0.7370 time=3.4s
+Epoch 6/6 avg_loss=0.7365 time=3.4s
+Profiling single step...
+Trace saved to ./runs/8_changing_path_to_32x8_2026_04_14__18_40_08.pt.trace.json
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 28/28 loss 0.7365 VRAM 5.4 GB 0:00:02
+          Training Summary —
+       8_changing_path_to_32x8
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value              ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.07 h  (248 s)    │
+│ Total steps   │ 168                │
+│ Avg steps/sec │ 0.68               │
+│ Peak VRAM     │ 5.38 GB  (5507 MB) │
+│ Avg loss      │ 0.7600             │
+└───────────────┴────────────────────┘
+
 Epoch 1/6 avg_loss=0.9005 time=25.9s
 Epoch 2/6 avg_loss=0.6295 time=11.7s
 Epoch 3/6 avg_loss=0.6189 time=11.8s

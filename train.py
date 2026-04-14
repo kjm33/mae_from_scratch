@@ -28,7 +28,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
 
-TENSORBOARD_PROFILE = "7_dali_loader"
+TENSORBOARD_PROFILE = "8_changing_path_to_32x8"
 
 
 def find_monitor_image(lines_dir):
@@ -82,7 +82,7 @@ def train():
 
     model = MaskedAutoencoderViT(
         img_size=(32, 512),
-        patch_size=8,
+        patch_size=(32, 8),
         in_chans=1,
         embed_dim=768,
         depth=12,

@@ -97,12 +97,15 @@ class MaskedAutoencoderViT(nn.Module):
 
         # --- Input / grid setup ---
         self.in_chans = in_chans
-        self.patch_size = patch_size if isinstance(patch_size, int) else patch_size[0]
-        if isinstance(img_size, (list, tuple)):
-            self._grid_size = (img_size[0] // self.patch_size, img_size[1] // self.patch_size)
+        if isinstance(patch_size, int):
+            self.patch_size = (patch_size, patch_size)
         else:
-            g = img_size // self.patch_size
-            self._grid_size = (g, g)
+            self.patch_size = tuple(patch_size)
+        ph, pw = self.patch_size
+        if isinstance(img_size, (list, tuple)):
+            self._grid_size = (img_size[0] // ph, img_size[1] // pw)
+        else:
+            self._grid_size = (img_size // ph, img_size // pw)
 
         # --------------------------------------------------------------------------
         # MAE encoder: processes only the *visible* (non-masked) patches
@@ -130,7 +133,7 @@ class MaskedAutoencoderViT(nn.Module):
             for i in range(decoder_depth)])
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True)
+        self.decoder_pred = nn.Linear(decoder_embed_dim, ph * pw * in_chans, bias=True)
 
         self.norm_pix_loss = norm_pix_loss
         self.initialize_weights()
@@ -171,15 +174,15 @@ class MaskedAutoencoderViT(nn.Module):
         Returns:
             x: (N, L, patch_size**2 * C)
         """
-        p = self.patch_embed.patch_size[0]
+        ph, pw = self.patch_size
         c = self.in_chans
-        assert imgs.shape[2] % p == 0 and imgs.shape[3] % p == 0
+        assert imgs.shape[2] % ph == 0 and imgs.shape[3] % pw == 0
 
-        h = imgs.shape[2] // p
-        w = imgs.shape[3] // p
-        x = imgs.reshape(shape=(imgs.shape[0], c, h, p, w, p))
+        h = imgs.shape[2] // ph
+        w = imgs.shape[3] // pw
+        x = imgs.reshape(shape=(imgs.shape[0], c, h, ph, w, pw))
         x = torch.einsum('nchpwq->nhwpqc', x)
-        x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * c))
+        x = x.reshape(shape=(imgs.shape[0], h * w, ph * pw * c))
         return x
 
     def unpatchify(self, x):
@@ -191,14 +194,14 @@ class MaskedAutoencoderViT(nn.Module):
         Returns:
             imgs: (N, C, H, W)
         """
-        p = self.patch_embed.patch_size[0]
+        ph, pw = self.patch_size
         c = self.in_chans
         h, w = self._grid_size
         assert h * w == x.shape[1]
 
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = x.reshape(shape=(x.shape[0], h, w, ph, pw, c))
         x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
+        imgs = x.reshape(shape=(x.shape[0], c, h * ph, w * pw))
         return imgs
 
     def random_masking(self, x, mask_ratio):
@@ -326,10 +329,19 @@ def mae_vit_huge_patch14(**kwargs):
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
 
 
-def mae_vit_base_patch8_32x512(**kwargs):
-    """MAE for Yiddish text/grayscale: img 32x512, patch 8, 1 channel, ViT-Base."""
+def mae_vit_base_patch32x8_32x512(**kwargs):
+    """MAE for Yiddish text/grayscale: img 32x512, patch (32h,8w), 1 channel, ViT-Base."""
     return MaskedAutoencoderViT(
-        img_size=(32, 512), patch_size=8, in_chans=1,
+        img_size=(32, 512), patch_size=(32, 8), in_chans=1,
+        embed_dim=768, depth=12, num_heads=12,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_pix_loss=True, **kwargs)
+
+def mae_vit_ultra_light(**kwargs):
+    """MAE for Yiddish text/grayscale: img 32x512, patch (32h,8w), 1 channel, ViT-Base."""
+    return MaskedAutoencoderViT(
+        img_size=(32, 512), patch_size=(32, 8), in_chans=1,
         embed_dim=768, depth=12, num_heads=12,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6),
