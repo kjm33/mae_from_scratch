@@ -14,19 +14,19 @@ The encoder learns rich representations by reconstructing randomly masked patche
 
 ## Architecture
 
-The model is a Vision Transformer (ViT) adapted for **rectangular grayscale images** (32x512 px). Patches are full-height columns of size `(32, 8)`, producing a `(1, 64)` grid — 64 patches per image.
+The model is a Vision Transformer (ViT) adapted for **rectangular grayscale images** (32x512 px). Patches are **full-height columns*** of size `(32, 8)`, producing a `(1, 64)` grid — 64 patches per image.
 
 Current config (`mae_vit_ultra_slim`):
 
-| Component | Value |
-|---|---|
-| Encoder embed dim | 256 |
-| Encoder depth | 6 layers |
-| Encoder heads | 4 |
-| Decoder embed dim | 128 |
-| Decoder depth | 2 layers |
-| Patch size | (32, 8) |
-| GPU step time | ~10 ms |
+| Component         | Value    |
+| ----------------- | -------- |
+| Encoder embed dim | 256      |
+| Encoder depth     | 6 layers |
+| Encoder heads     | 4        |
+| Decoder embed dim | 128      |
+| Decoder depth     | 2 layers |
+| Patch size        | (32, 8)  |
+| GPU step time     | ~10 ms   |
 
 ## Project Structure
 
@@ -106,21 +106,21 @@ The training pipeline evolved through a series of profiler-driven optimizations.
 
 Starting point: ViT-Base MAE (patch 8x8, 256 tokens per image), HuggingFace Accelerate wrapper, PyTorch DataLoader with in-RAM dataset, `torch.compile(mode="reduce-overhead")`, bf16 autocast, bitsandbytes AdamW8bit.
 
-| Metric | Value |
-|---|---|
-| Epoch time | ~12.5 s |
-| Peak VRAM | 16.6 GB |
-| GPU kernel density | — |
+| Metric             | Value   |
+| ------------------ | ------- |
+| Epoch time         | ~12.5 s |
+| Peak VRAM          | 16.6 GB |
+| GPU kernel density | —       |
 
 ### Step 1 — Remove Accelerate
 
 Profiling revealed that the HuggingFace Accelerate wrapper added unnecessary abstraction for a single-GPU setup. Replacing it with direct `model.to(device)` + manual autocast simplified the code and eliminated hidden overhead.
 
-| Metric | Before | After |
-|---|---|---|
-| First epoch | 17.2 s | 79.7 s (torch.compile warmup now visible) |
-| Steady-state epoch | 12.5 s | 12.4 s |
-| Steps/sec | 2.24 | 1.23 (amortized over warmup) |
+| Metric             | Before | After                                     |
+| ------------------ | ------ | ----------------------------------------- |
+| First epoch        | 17.2 s | 79.7 s (torch.compile warmup now visible) |
+| Steady-state epoch | 12.5 s | 12.4 s                                    |
+| Steps/sec          | 2.24   | 1.23 (amortized over warmup)              |
 
 **Insight:** Accelerate was hiding `torch.compile` warmup cost by compiling lazily. Without the wrapper, the first-epoch compilation penalty became explicit — but steady-state was identical, and the code was now transparent and debuggable.
 
@@ -128,10 +128,10 @@ Profiling revealed that the HuggingFace Accelerate wrapper added unnecessary abs
 
 Switched to `bitsandbytes.optim.AdamW8bit` to reduce optimizer state memory. Saved ~600 MB VRAM.
 
-| Metric | Before | After |
-|---|---|---|
-| Peak VRAM | 16.6 GB | 16.0 GB |
-| Epoch time | 12.4 s | 12.6 s |
+| Metric     | Before  | After   |
+| ---------- | ------- | ------- |
+| Peak VRAM  | 16.6 GB | 16.0 GB |
+| Epoch time | 12.4 s  | 12.6 s  |
 
 **Trade-off:** Marginal VRAM win but introduced a hidden cost discovered later (Step 5).
 
@@ -139,9 +139,9 @@ Switched to `bitsandbytes.optim.AdamW8bit` to reduce optimizer state memory. Sav
 
 Replaced the PyTorch `DataLoader` + in-RAM `Dataset` with an NVIDIA DALI pipeline backed by a numpy memmap file. A one-time `prepare_dataset.py` script decodes and resizes all images into a single `(N, 32, 512)` uint8 `.npy` file. DALI reads it via memory-mapping, normalizes on GPU, and delivers batches already on device as float32.
 
-| Metric | Before | After |
-|---|---|---|
-| Epoch time | 12.6 s | 11.8 s |
+| Metric      | Before               | After         |
+| ----------- | -------------------- | ------------- |
+| Epoch time  | 12.6 s               | 11.8 s        |
 | Data on GPU | needed `.to(device)` | already there |
 
 **Why it matters:** Decode and resize cost was paid every epoch with the old loader. Now it's paid once (in `prepare_dataset.py`), and the OS page cache handles the rest. No `.to()`, `.float()`, or `.div_()` calls needed in the training loop.
@@ -152,10 +152,10 @@ Profiling (run 5) revealed that `loss.item()` called every step was triggering `
 
 **Fix:** Accumulate loss as a detached GPU tensor across all steps, call `.item()` once at epoch end.
 
-| Metric | Before | After |
-|---|---|---|
-| CPU sync per step | 187–403 ms | 0 ms |
-| Syncs per epoch | 28 (every step) | 1 (epoch end) |
+| Metric            | Before          | After         |
+| ----------------- | --------------- | ------------- |
+| CPU sync per step | 187–403 ms      | 0 ms          |
+| Syncs per epoch   | 28 (every step) | 1 (epoch end) |
 
 ### Step 5 — Replace 8-bit Optimizer with Fused AdamW
 
@@ -163,11 +163,11 @@ Profiling revealed that `bitsandbytes.AdamW8bit` issued **252 `cudaDeviceSynchro
 
 **Fix:** Switched to `torch.optim.AdamW(fused=True)` — a single `multi_tensor_apply_kernel` over all parameters, zero per-parameter syncs.
 
-| Metric | Before (AdamW8bit) | After (fused AdamW) |
-|---|---|---|
-| Optimizer syncs/step | 252 | 0 |
-| Optimizer wall time | 24.8 ms | ~6 ms |
-| VRAM | 16.0 GB | 16.6 GB (+600 MB) |
+| Metric               | Before (AdamW8bit) | After (fused AdamW) |
+| -------------------- | ------------------ | ------------------- |
+| Optimizer syncs/step | 252                | 0                   |
+| Optimizer wall time  | 24.8 ms            | ~6 ms               |
+| VRAM                 | 16.0 GB            | 16.6 GB (+600 MB)   |
 
 **Trade-off:** Used ~600 MB more VRAM (fp32 optimizer states vs 8-bit), but eliminated the sync bottleneck entirely. Worth it on a 24 GB card.
 
@@ -179,21 +179,21 @@ Extended `torch.compile` to cover the **entire `train_step`** function — `zero
 
 The result: the entire training step is captured into **two CUDA graphs**. The CPU fires two `cudaGraphLaunch` calls per step (~1 ms total CPU overhead).
 
-| Metric | Before | After |
-|---|---|---|
-| GPU kernel density | 90.7% | 99.7% |
+| Metric                   | Before           | After                 |
+| ------------------------ | ---------------- | --------------------- |
+| GPU kernel density       | 90.7%            | 99.7%                 |
 | CUDA graph launches/step | 2 (fwd+bwd only) | 2 (fwd+bwd+optimizer) |
-| CPU overhead/step | ~25 ms | ~1 ms |
+| CPU overhead/step        | ~25 ms           | ~1 ms                 |
 
 ### Step 7 — Rectangular Patches (32x8)
 
 The original 8x8 patches produced 256 tokens per 32x512 image — far more than necessary for narrow text lines. Switching to full-height `(32, 8)` patches reduced the token count to 64, cutting attention cost quadratically.
 
-| Metric | Before (8x8, 256 tokens) | After (32x8, 64 tokens) |
-|---|---|---|
-| Epoch time | ~12 s | ~3.4 s |
-| Peak VRAM | 16.6 GB | 5.4 GB |
-| Step time (GPU) | ~197 ms | ~35 ms |
+| Metric          | Before (8x8, 256 tokens) | After (32x8, 64 tokens) |
+| --------------- | ------------------------ | ----------------------- |
+| Epoch time      | ~12 s                    | ~3.4 s                  |
+| Peak VRAM       | 16.6 GB                  | 5.4 GB                  |
+| Step time (GPU) | ~197 ms                  | ~35 ms                  |
 
 **3.5x faster, 3x less VRAM.** The biggest single optimization. Full-height patches make physical sense for text lines — each patch is a character-width column spanning the full line height.
 
@@ -201,41 +201,59 @@ The original 8x8 patches produced 256 tokens per 32x512 image — far more than 
 
 The original ViT-Base (embed_dim=768, depth=12, heads=12) was designed for ImageNet classification of 256x256 RGB images — massive overkill for 32x512 grayscale text lines. Replaced with `mae_vit_ultra_slim`: embed_dim=256, depth=6, heads=4, decoder_embed=128, decoder_depth=2.
 
-| Metric | Before (ViT-Base, 32x8) | After (ultra_slim, 32x8) |
-|---|---|---|
-| Epoch time | 3.4 s | 0.3 s |
-| First epoch | 230 s | 12.8 s |
-| Peak VRAM | 5.4 GB | 0.5 GB |
-| Steps/sec | 0.68 | 11.73 |
-| GPU step time | ~35 ms | ~10 ms |
+| Metric        | Before (ViT-Base, 32x8) | After (ultra_slim, 32x8) |
+| ------------- | ----------------------- | ------------------------ |
+| Epoch time    | 3.4 s                   | 0.3 s                    |
+| First epoch   | 230 s                   | 12.8 s                   |
+| Peak VRAM     | 5.4 GB                  | 0.5 GB                   |
+| Steps/sec     | 0.68                    | 11.73                    |
+| GPU step time | ~35 ms                  | ~10 ms                   |
 
 **11x faster epochs, 10x less VRAM.** The model is now right-sized for the task.
 
 ### Final State
 
-| Metric | Baseline | Final |
-|---|---|---|
-| Epoch time | 12.5 s | 0.3 s |
-| GPU step time | ~222 ms | ~10 ms |
-| Peak VRAM | 16.6 GB | 0.5 GB |
-| GPU kernel density | 90.7% | 98.5% |
-| CPU overhead/step | ~227 ms | ~1 ms |
-| CUDA graph launches/step | 0 | 2 |
-| Data pipeline | PyTorch DataLoader | DALI memmap (GPU-resident) |
-| Optimizer | bnb AdamW8bit (252 syncs/step) | Fused AdamW (0 syncs) |
-| Loss sync | Every step (cudaStreamSync) | Once per epoch |
+| Metric                   | Baseline                       | Final                      |
+| ------------------------ | ------------------------------ | -------------------------- |
+| Epoch time               | 12.5 s                         | 0.3 s                      |
+| GPU step time            | ~222 ms                        | ~10 ms                     |
+| Peak VRAM                | 16.6 GB                        | 0.5 GB                     |
+| GPU kernel density       | 90.7%                          | 98.5%                      |
+| CPU overhead/step        | ~227 ms                        | ~1 ms                      |
+| CUDA graph launches/step | 0                              | 2                          |
+| Data pipeline            | PyTorch DataLoader             | DALI memmap (GPU-resident) |
+| Optimizer                | bnb AdamW8bit (252 syncs/step) | Fused AdamW (0 syncs)      |
+| Loss sync                | Every step (cudaStreamSync)    | Once per epoch             |
 
 Two CUDA graph launches per step. Triton fused kernels dominate (44%), FlashAttention backward 15%, optimizer 10%. The GPU is compute-bound in a healthy way — no idle gaps, no sync stalls, no data loading bottlenecks.
 
 ## Key Hyperparameters
 
-| Parameter | Value |
-|---|---|
-| Mask ratio | 0.75 |
-| Batch size | 256 |
-| Learning rate | 1.5e-4 |
-| Weight decay | 0.05 |
-| Normalized pixel loss | Yes |
+| Parameter             | Value  |
+| --------------------- | ------ |
+| Mask ratio            | 0.75   |
+| Batch size            | 256    |
+| Learning rate         | 1.5e-4 |
+| Weight decay          | 0.05   |
+| Normalized pixel loss | Yes    |
+
+
+
+## Plan
+
+### Add convolutional layers
+
+During reading [Transformers for Natural Language Processing and Computer Vision - Third Edition [Book]](https://www.oreilly.com/library/view/transformers-for-natural/9781805128724/) I noticed that decribed ViT model (Google/ViT-Base-Patch16–224) contains CNNs.
+
+
+
+### Changing positional encoding to RoPE
+
+### Using only x-axis position encoding
+
+### Research and apply optimization methods from EfficientViT
+
+EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention
 
 ## References
 
