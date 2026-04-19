@@ -77,6 +77,45 @@ class FlashAttention(nn.Module):
         return x
 
 
+class TokenInteractionBlock(nn.Module):
+    """ViT block with a depthwise 1D token-interaction conv inserted before the MLP.
+
+    From EfficientViT (Liu et al., 2023). The DWConv runs on the sequence (N) dimension
+    with kernel=3, letting each token gather local context from its two immediate
+    neighbours before the FFN mixes channels.
+
+    Layout:
+        norm1   → FlashAttention → residual
+        norm_ti → DWConv1d(groups=dim, k=3) → residual
+        norm2   → MLP → residual
+    """
+
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=True,
+                 norm_layer=nn.LayerNorm, **kwargs):
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = FlashAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias)
+
+        self.norm_ti = norm_layer(dim)
+        self.token_interaction = nn.Conv1d(dim, dim, kernel_size=3, padding=1, groups=dim)
+
+        self.norm2 = norm_layer(dim)
+        hidden = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, dim),
+        )
+
+    def forward(self, x):
+        # x: (B, N, C)
+        x = x + self.attn(self.norm1(x))
+        # Conv1d expects (B, C, N) — transpose in, transpose out
+        x = x + self.token_interaction(self.norm_ti(x).transpose(1, 2)).transpose(1, 2)
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+
 class MaskedAutoencoderViT(nn.Module):
     """
     Masked Autoencoder with Vision Transformer (ViT) backbone.
@@ -92,7 +131,8 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
+                 token_interaction=False):
         super().__init__()
 
         # --- Input / grid setup ---
@@ -116,8 +156,10 @@ class MaskedAutoencoderViT(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)
 
+        encoder_block = TokenInteractionBlock if token_interaction else \
+            partial(Block, attn_layer=FlashAttention)
         self.blocks = nn.ModuleList([
-            Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer, attn_layer=FlashAttention)
+            encoder_block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
@@ -164,6 +206,10 @@ class MaskedAutoencoderViT(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv1d):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def patchify(self, imgs):
         """
@@ -352,4 +398,6 @@ def mae_vit_ultra_light(**kwargs):
         decoder_num_heads=8,
         mlp_ratio=4,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        norm_pix_loss=True, **kwargs)
+        norm_pix_loss=True,
+        token_interaction=True,
+        **kwargs)
