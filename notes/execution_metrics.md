@@ -1,3 +1,45 @@
+WITHOUT CUDA graphs
+(venv) ➜  mae_from_scratch git:(main) ✗ ./profile_ncu.sh 15_large_batch_size
+==PROF== Connected to process 387949 (/usr/bin/python3.12)
+DALI pipeline: 238378 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
+Epoch 1/6 avg_loss=0.7908 time=12.6s
+Epoch 2/6 avg_loss=0.7099 time=11.5s
+Epoch 3/6 avg_loss=0.7052 time=11.6s
+Epoch 4/6 avg_loss=0.7026 time=11.6s
+Epoch 5/6 avg_loss=0.7023 time=11.7s
+Epoch 6/6 avg_loss=0.7023 time=11.7s
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 46/46 loss 0.7023 VRAM 16.0 GB 0:00:11
+        Training Summary — None
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value                ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.02 h  (71 s)       │
+│ Total steps   │ 276                  │
+│ Avg steps/sec │ 3.91                 │
+│ Peak VRAM     │ 16.04 GB  (16429 MB) │
+│ Avg loss      │ 0.7188               │
+└───────────────┴──────────────────────┘
+
+WITH CUDA graphs
+DALI pipeline: 238378 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
+Epoch 1/6 avg_loss=0.7759 time=19.5s
+Epoch 2/6 avg_loss=0.7064 time=8.8s
+Epoch 3/6 avg_loss=0.7021 time=8.8s
+Epoch 4/6 avg_loss=0.7020 time=8.9s
+Epoch 5/6 avg_loss=0.7019 time=8.9s
+Epoch 6/6 avg_loss=0.7015 time=8.9s
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 46/46 loss 0.7015 VRAM 22.2 GB 0:00:05
+        Training Summary — None
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value                ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.02 h  (64 s)       │
+│ Total steps   │ 276                  │
+│ Avg steps/sec │ 4.32                 │
+│ Peak VRAM     │ 22.22 GB  (22757 MB) │
+│ Avg loss      │ 0.7150               │
+└───────────────┴──────────────────────┘
+
           Training Summary —
          13_token_interaction
 ┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
