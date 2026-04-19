@@ -22,7 +22,7 @@ import torch.nn.functional as F
 
 from timm.models.vision_transformer import PatchEmbed, Block
 
-from .pos_embed import get_2d_sincos_pos_embed
+from .pos_embed import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
 
 
 class FlashAttention(nn.Module):
@@ -181,13 +181,23 @@ class MaskedAutoencoderViT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        """Initialize encoder/decoder weights. Position embeddings use fixed 2D sin-cos; rest use standard init."""
-        grid_size = self._grid_size
+        """Initialize encoder/decoder weights. Position embeddings use fixed sin-cos; rest use standard init."""
+        grid_h, grid_w = self._grid_size
 
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], grid_size, cls_token=True)
+        # When the patch grid has only one row (full-height patches), the 2D embedding
+        # wastes half of embed_dim on a constant height encoding (sin/cos of position 0
+        # is identical for all patches). Use 1D embedding instead to use all dims for
+        # the varying horizontal positions.
+        _make_pos = (
+            lambda dim, n_tok: get_1d_sincos_pos_embed(dim, grid_w, cls_token=True)
+            if grid_h == 1
+            else get_2d_sincos_pos_embed(dim, (grid_h, grid_w), cls_token=True)
+        )
+
+        pos_embed = _make_pos(self.pos_embed.shape[-1], None)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], grid_size, cls_token=True)
+        decoder_pos_embed = _make_pos(self.decoder_pos_embed.shape[-1], None)
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
 
         w = self.patch_embed.proj.weight.data

@@ -13,6 +13,27 @@
 import numpy as np
 
 
+def get_1d_sincos_pos_embed(embed_dim, length, cls_token=False):
+    """1D sin-cos positional embedding using the full embed_dim for a single axis.
+
+    Use this instead of get_2d_sincos_pos_embed when the patch grid has only one row
+    (e.g. grid_size=(1, 64)). The 2D version wastes half the embedding dimensions on
+    a constant height encoding (sin/cos of position 0 is identical for all patches).
+
+    Args:
+        embed_dim: total embedding dimension (all dims used for the single axis)
+        length:    number of positions
+        cls_token: if True, prepend a zero vector for the CLS token
+    Returns:
+        pos_embed: (length, embed_dim) or (1+length, embed_dim) with cls_token
+    """
+    pos = np.arange(length, dtype=np.float32)
+    pos_embed = get_1d_sincos_pos_embed_from_grid(embed_dim, pos)  # (length, embed_dim)
+    if cls_token:
+        pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
     """
     grid_size: int (square grid) or tuple (grid_h, grid_w) for rectangular
