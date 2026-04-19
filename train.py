@@ -82,19 +82,19 @@ def train(profile: str | None = None):
 
     model = mae_vit_ultra_light().to(device)
 
-    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*5, num_threads=4)
+    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*8, num_threads=4)
 
     # lr=1.5e-4 is tuned for batch_size=256. Linear scaling rule: lr = 1.5e-4 * (batch_size / 256).
-    # At batch_size=4096 that gives 2.4e-3. MAE is tolerant of deviations but worth aligning
+    # At batch_size=8192 that gives 4.8e-3. MAE is tolerant of deviations but worth aligning
     # for real training runs.
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3.0e-3, weight_decay=0.05, fused=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=4.8e-3, weight_decay=0.05, fused=True)
 
     num_epochs = 6
     # Cosine decay with 5% linear warmup — matches the MAE paper's schedule.
-    # max_lr=3.0e-3 is the linearly scaled lr for batch_size=5120 (base 1.5e-4 at 256).
+    # max_lr=4.8e-3 is the linearly scaled lr for batch_size=8192 (base 1.5e-4 at 256).
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=3.0e-3,
+        max_lr=4.8e-3,
         steps_per_epoch=len(dataloader),
         epochs=num_epochs,
         pct_start=0.05,
@@ -107,7 +107,7 @@ def train(profile: str | None = None):
     # implementations (GEMM tilings, Triton configs) and picks the fastest —
     # longer first-step compile, but results are cached in .cache/.
     #@torch.compile(mode="max-autotune")
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(mode="default")
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
         with torch.profiler.record_function("forward"):
