@@ -1,3 +1,33 @@
+          Training Summary —
+         13_token_interaction
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value              ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.04 h  (139 s)    │
+│ Total steps   │ 6                  │
+│ Avg steps/sec │ 0.04               │
+│ Peak VRAM     │ 7.73 GB  (7911 MB) │
+│ Avg loss      │ 1.1897             │
+└───────────────┴────────────────────┘
+
+Epoch 1/6 avg_loss=1.5408 time=5.1s
+Epoch 2/6 avg_loss=1.3443 time=0.3s
+Epoch 3/6 avg_loss=1.2397 time=0.2s
+Epoch 4/6 avg_loss=1.1734 time=0.2s
+Epoch 5/6 avg_loss=1.1207 time=0.2s
+Epoch 6/6 avg_loss=1.0866 time=0.2s
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1/1 loss 1.0866 VRAM 7.7 GB 0:00:00
+       Training Summary — None
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value              ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.00 h  (6 s)      │
+│ Total steps   │ 6                  │
+│ Avg steps/sec │ 0.99               │
+│ Peak VRAM     │ 7.73 GB  (7913 MB) │
+│ Avg loss      │ 1.2509             │
+└───────────────┴────────────────────┘
+
 DALI pipeline: 7279 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
 Epoch 1/6 avg_loss=0.9564 time=12.8s
 Epoch 2/6 avg_loss=0.7597 time=0.3s
