@@ -43,7 +43,8 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
 
     source._perm = rng.permutation(n)
 
-    @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id)
+    @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id,
+                  prefetch_queue_depth=1)
     def _pipeline():
         images = fn.external_source(
             source=source,
