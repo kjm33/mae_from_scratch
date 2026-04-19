@@ -7,37 +7,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NCU_DIR="$SCRIPT_DIR/ncu"
 mkdir -p "$NCU_DIR"
 
-# TORCHDYNAMO_DISABLE=1
-#   torch.compile captures the training step into CUDA graphs. NCU cannot profile
-#   individual kernels inside a graph blob — disabling dynamo makes every kernel visible.
+# Uses profile_step.py instead of train.py — a minimal script with no DALI, no scheduler,
+# just WARMUP_STEPS warmup steps then one captured step (BATCH_SIZE=256).
 #
-# --replay-mode application
-#   Replays the entire application from scratch for each metric collection pass, instead
-#   of saving/restoring GPU memory per kernel (--replay-mode kernel). Required when GPU
-#   memory is large (e.g. big batches): kernel replay backs up device memory to system
-#   RAM and overflows, causing LaunchFailed. Slower per-pass but the only mode that works
-#   at scale.
+# --replay-mode kernel
+#   Works because BATCH_SIZE=256 keeps GPU memory small (~1 GB), so per-kernel memory
+#   backup to RAM is fast. Use --replay-mode application only when GPU memory is large
+#   (e.g. full training batch of 5120+).
 #
-# --set basic
-#   213 metrics — minimises the number of application replays needed.
-#   Alternatives (more replays, larger report):
-#     --set detailed   ~1000 metrics
-#     --set roofline   6679 metrics, full hierarchical roofline charts
-#     --set full       8051 metrics
-#
-# --launch-skip / --launch-count
-#   Skip the first 1000 kernel launches (DALI startup + a few eager steps), then
-#   capture ~600 launches (~one full forward+backward+optimizer step).
+# --set basic     213 metrics, fast
+# --set detailed  ~1000 metrics, good balance
+# --set roofline  6679 metrics, full hierarchical roofline (slow)
+# --set full      8051 metrics (very slow)
 
-TORCHDYNAMO_DISABLE=1 ncu \
+ncu \
     --target-processes all \
-    --replay-mode application \
-    --set basic \
-    --launch-skip 1000 \
-    --launch-count 600 \
+    --replay-mode kernel \
+    --set detailed \
     -o "$NCU_DIR/$PROFILE_NAME" \
     -f \
-    python "$SCRIPT_DIR/train.py"
+    python "$SCRIPT_DIR/profile_step.py"
 
 echo ""
 echo "Report saved to: $NCU_DIR/$PROFILE_NAME.ncu-rep"
