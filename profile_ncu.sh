@@ -8,39 +8,30 @@ NCU_DIR="$SCRIPT_DIR/ncu"
 mkdir -p "$NCU_DIR"
 
 # TORCHDYNAMO_DISABLE=1
-#   torch.compile(mode="max-autotune") captures the training step into CUDA graphs.
-#   NCU's kernel-replay mode cannot profile kernels inside a CUDA graph blob — it needs
-#   to replay each kernel individually.  Disabling dynamo makes every kernel visible.
+#   torch.compile captures the training step into CUDA graphs. NCU cannot profile
+#   individual kernels inside a graph blob — disabling dynamo makes every kernel visible.
 #
-# --replay-mode kernel
-#   Replay each kernel in isolation to collect hardware counters.  Fastest option;
-#   works correctly once CUDA graphs are out of the way.
+# --replay-mode application
+#   Replays the entire application from scratch for each metric collection pass, instead
+#   of saving/restoring GPU memory per kernel (--replay-mode kernel). Required when GPU
+#   memory is large (e.g. big batches): kernel replay backs up device memory to system
+#   RAM and overflows, causing LaunchFailed. Slower per-pass but the only mode that works
+#   at scale.
 #
-# --set detailed
-#   Sections: ComputeWorkloadAnalysis, MemoryWorkloadAnalysis (+Chart), LaunchStats,
-#   Occupancy, SourceCounters, SpeedOfLight (+RooflineChart), Tile, WorkloadDistribution.
-#   ~1000 metrics — good balance between depth and collection time.
-#   Alternatives:
-#     --set basic     213 metrics, quick sanity check
-#     --set roofline  6679 metrics, full hierarchical roofline charts (slow)
-#     --set full      8051 metrics, everything (very slow)
+# --set basic
+#   213 metrics — minimises the number of application replays needed.
+#   Alternatives (more replays, larger report):
+#     --set detailed   ~1000 metrics
+#     --set roofline   6679 metrics, full hierarchical roofline charts
+#     --set full       8051 metrics
 #
 # --launch-skip / --launch-count
-#   Skip the first 1000 kernel launches (covers DALI pipeline startup + a few train
-#   steps to reach steady-state without compile warmup), then capture ~600 launches
-#   (~one full forward+backward+optimizer step at eager speed).
-#   Tune these if the captured range misses the step you want.
-#
-# --nvtx / --nvtx-include
-#   PyTorch emits NVTX ranges for torch.profiler.record_function annotations.
-#   Uncomment --nvtx-include to restrict capture to a single named range, e.g.:
-#     --nvtx --nvtx-include "forward"   (encoder forward only)
-#     --nvtx --nvtx-include "backward"  (backward pass only)
-#   This is more precise than skip/count when NVTX markers land on GPU correctly.
+#   Skip the first 1000 kernel launches (DALI startup + a few eager steps), then
+#   capture ~600 launches (~one full forward+backward+optimizer step).
 
 TORCHDYNAMO_DISABLE=1 ncu \
     --target-processes all \
-    --replay-mode kernel \
+    --replay-mode application \
     --set basic \
     --launch-skip 1000 \
     --launch-count 600 \
