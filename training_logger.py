@@ -105,7 +105,8 @@ class TrainingLogger:
     def on_step(self):
         self.total_steps += 1
 
-        vram_mb = torch.cuda.max_memory_allocated(self.device) / 1024**2
+        free, total = torch.cuda.mem_get_info(self.device)
+        vram_mb = (total - free) / 1024**2
         self.max_vram_mb = max(self.max_vram_mb, vram_mb)
         self._progress.update(self._task, advance=1, vram=vram_mb / 1024)
 
