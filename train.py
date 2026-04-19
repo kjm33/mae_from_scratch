@@ -112,7 +112,12 @@ def train(profile: str | None = None):
         optimizer.zero_grad(set_to_none=True)
         with torch.profiler.record_function("forward"):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss, _, _ = model(batch, mask_ratio=0.75)
+                # forward_loss runs outside autocast (below) so patchify + var + MSE
+                # compute in fp32. bf16 var over 256 pixels is imprecise, especially
+                # for low-variance background patches common in Yiddish text.
+                latent, mask, ids_restore = model.forward_encoder(batch, mask_ratio=0.75)
+                pred = model.forward_decoder(latent, ids_restore)
+            loss = model.forward_loss(batch, pred, mask)  # fp32
         with torch.profiler.record_function("backward"):
             loss.backward()
         with torch.profiler.record_function("optimizer_step"):

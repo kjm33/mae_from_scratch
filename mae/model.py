@@ -44,7 +44,8 @@ class FlashAttention(nn.Module):
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        # self.scale is intentionally omitted: F.scaled_dot_product_attention computes
+        # its own 1/sqrt(head_dim) scale internally.
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
@@ -131,7 +132,8 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
+                 mlp_ratio=4., decoder_mlp_ratio=None,
+                 norm_layer=nn.LayerNorm, norm_pix_loss=False,
                  token_interaction=False):
         super().__init__()
 
@@ -170,8 +172,11 @@ class MaskedAutoencoderViT(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
         self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, decoder_embed_dim), requires_grad=False)
 
+        # decoder_mlp_ratio defaults to mlp_ratio when not set; can be set lower (e.g. 2)
+        # since the decoder is a throwaway reconstruction head, not a feature extractor.
+        _dec_mlp = decoder_mlp_ratio if decoder_mlp_ratio is not None else mlp_ratio
         self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer, attn_layer=FlashAttention)
+            Block(decoder_embed_dim, decoder_num_heads, _dec_mlp, qkv_bias=True, norm_layer=norm_layer, attn_layer=FlashAttention)
             for i in range(decoder_depth)])
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
@@ -280,7 +285,9 @@ class MaskedAutoencoderViT(nn.Module):
         ids_restore = torch.argsort(ids_shuffle, dim=1)
 
         ids_keep = ids_shuffle[:, :len_keep]
-        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+        # .expand instead of .repeat: zero-copy broadcast view, no 256 MB int64 allocation.
+        # torch.gather and torch.compile both handle non-contiguous expanded tensors.
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
 
         mask = torch.ones([N, L], device=x.device)
         mask[:, :len_keep] = 0
@@ -311,7 +318,8 @@ class MaskedAutoencoderViT(nn.Module):
         num_mask = ids_restore.shape[1] + 1 - x.shape[1]
         mask_tokens = self.mask_token.repeat(x.shape[0], num_mask, 1)
         x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)
-        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))
+        # .expand: zero-copy broadcast, avoids 512 MB int64 allocation per step.
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, x.shape[2]))
         x = torch.cat([x[:, :1, :], x_], dim=1)
 
         x = x + self.decoder_pos_embed
@@ -332,9 +340,10 @@ class MaskedAutoencoderViT(nn.Module):
         """
         target = self.patchify(imgs)
         if self.norm_pix_loss:
-            mean = target.mean(dim=-1, keepdim=True)
-            var = target.var(dim=-1, keepdim=True)
-            target = (target - mean) / (var + 1.e-6)**.5
+            # F.layer_norm uses a fused single-pass Welford kernel (faster than separate
+            # mean+var calls) and biased variance (N not N-1, negligible difference at 256
+            # pixels/patch). weight/bias are None so no learnable params are added.
+            target = F.layer_norm(target, [target.shape[-1]], eps=1e-6)
 
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # (N, L) -- MSE per patch
@@ -405,8 +414,9 @@ def mae_vit_ultra_light(**kwargs):
         num_heads=4,
         decoder_embed_dim=128,
         decoder_depth=2,
-        decoder_num_heads=8,
+        decoder_num_heads=4,       # head_dim: 16 → 32 (better SDPA kernel alignment)
         mlp_ratio=4,
+        decoder_mlp_ratio=2,       # decoder hidden: 512 → 256 (reconstruction head, not feature extractor)
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         norm_pix_loss=True,
         token_interaction=True,
