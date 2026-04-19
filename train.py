@@ -84,7 +84,22 @@ def train(profile: str | None = None):
 
     dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=256, num_threads=4)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1.5e-4, weight_decay=0.05, fused=True)
+    # lr=1.5e-4 is tuned for batch_size=256. Linear scaling rule: lr = 1.5e-4 * (batch_size / 256).
+    # At batch_size=4096 that gives 2.4e-3. MAE is tolerant of deviations but worth aligning
+    # for real training runs.
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3.0e-3, weight_decay=0.05, fused=True)
+
+    num_epochs = 6
+    # Cosine decay with 5% linear warmup — matches the MAE paper's schedule.
+    # max_lr=3.0e-3 is the linearly scaled lr for batch_size=5120 (base 1.5e-4 at 256).
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=3.0e-3,
+        steps_per_epoch=len(dataloader),
+        epochs=num_epochs,
+        pct_start=0.05,
+        anneal_strategy="cos",
+    )
 
     # Compile the full training step (forward + backward + optimizer) into a single
     # CUDA graph so the optimizer kernel launches are captured too, eliminating
@@ -100,6 +115,7 @@ def train(profile: str | None = None):
         with torch.profiler.record_function("backward"):
             loss.backward()
         with torch.profiler.record_function("optimizer_step"):
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         return loss
 
@@ -114,6 +130,7 @@ def train(profile: str | None = None):
             for step, batch_data in enumerate(dataloader):
                 batch = batch_data[0]["images"]  # (N, 1, H, W) float32 on GPU
                 loss = train_step(batch)
+                scheduler.step()  # CPU-side lr update — outside compiled graph
                 epoch_loss += loss.detach()
                 logger.on_step()
 
