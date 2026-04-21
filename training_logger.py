@@ -32,11 +32,12 @@ class TrainingLogger:
                     optimizer.zero_grad()
     """
 
-    def __init__(self, device, num_epochs, steps_per_epoch, profile_tag):
+    def __init__(self, device, num_epochs, steps_per_epoch, profile_tag, silent=False):
         self.device = device
         self.num_epochs = num_epochs
         self.steps_per_epoch = steps_per_epoch
         self.profile_tag = profile_tag
+        self.silent = silent
 
         self.console = Console()
         self._progress = None
@@ -57,26 +58,28 @@ class TrainingLogger:
 
     def __enter__(self):
         self.train_start = time.time()
-        self._progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.fields[num_epochs]}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("loss [green]{task.fields[loss]:.4f}"),
-            TextColumn("VRAM [yellow]{task.fields[vram]:.1f} GB"),
-            TimeElapsedColumn(),
-            console=self.console,
-        )
-        self._progress.__enter__()
-        self._task = self._progress.add_task(
-            "train", total=self.steps_per_epoch,
-            epoch=1, num_epochs=self.num_epochs, loss=0.0, vram=0.0,
-        )
+        if not self.silent:
+            self._progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.fields[num_epochs]}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("loss [green]{task.fields[loss]:.4f}"),
+                TextColumn("VRAM [yellow]{task.fields[vram]:.1f} GB"),
+                TimeElapsedColumn(),
+                console=self.console,
+            )
+            self._progress.__enter__()
+            self._task = self._progress.add_task(
+                "train", total=self.steps_per_epoch,
+                epoch=1, num_epochs=self.num_epochs, loss=0.0, vram=0.0,
+            )
         return self
 
     def __exit__(self, *_):
-        self._progress.__exit__(None, None, None)
-        self._print_summary()
+        if not self.silent:
+            self._progress.__exit__(None, None, None)
+            self._print_summary()
 
     # ------------------------------------------------------------------
     # per-epoch hooks
@@ -84,19 +87,21 @@ class TrainingLogger:
 
     def begin_epoch(self, epoch):
         self._epoch_start = time.time()
-        self._progress.reset(self._task, total=self.steps_per_epoch)
-        self._progress.update(self._task, epoch=epoch + 1)
+        if not self.silent:
+            self._progress.reset(self._task, total=self.steps_per_epoch)
+            self._progress.update(self._task, epoch=epoch + 1)
 
     def end_epoch(self, epoch, avg_loss: float):
         self.total_loss += avg_loss
         self.total_epochs += 1
-        epoch_time = time.time() - self._epoch_start
-        self._progress.update(self._task, loss=avg_loss)
-        self.console.print(
-            f"[bold]Epoch {epoch + 1}/{self.num_epochs}[/bold] "
-            f"avg_loss=[green]{avg_loss:.4f}[/green] "
-            f"time=[cyan]{epoch_time:.1f}s[/cyan]"
-        )
+        if not self.silent:
+            epoch_time = time.time() - self._epoch_start
+            self._progress.update(self._task, loss=avg_loss)
+            self.console.print(
+                f"[bold]Epoch {epoch + 1}/{self.num_epochs}[/bold] "
+                f"avg_loss=[green]{avg_loss:.4f}[/green] "
+                f"time=[cyan]{epoch_time:.1f}s[/cyan]"
+            )
 
     # ------------------------------------------------------------------
     # per-step hook
@@ -104,10 +109,10 @@ class TrainingLogger:
 
     def on_step(self):
         self.total_steps += 1
-
-        vram_mb = torch.cuda.memory_reserved(self.device) / 1024**2
-        self.max_vram_mb = max(self.max_vram_mb, vram_mb)
-        self._progress.update(self._task, advance=1, vram=vram_mb / 1024)
+        if not self.silent:
+            vram_mb = torch.cuda.memory_reserved(self.device) / 1024**2
+            self.max_vram_mb = max(self.max_vram_mb, vram_mb)
+            self._progress.update(self._task, advance=1, vram=vram_mb / 1024)
 
     # ------------------------------------------------------------------
     # single-step profiling with NVTX section annotations

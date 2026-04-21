@@ -10,6 +10,8 @@ import logging
 
 import cv2
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # torch.compile can't trace profiler record_function annotations — expected, not a bug
 logging.getLogger("torch._dynamo.variables.torch").setLevel(logging.ERROR)
@@ -78,6 +80,22 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
     writer.add_image("monitor/reconstructed", r, epoch, dataformats="CHW")
 
 
+class _TrainStep(torch.nn.Module):
+    """Wraps the three MAE sub-functions into one forward() so DDP can hook into it.
+
+    Keeps forward_loss in fp32 (outside autocast) as in the single-GPU path.
+    """
+    def __init__(self, mae):
+        super().__init__()
+        self.mae = mae
+
+    def forward(self, x):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            latent, mask, ids_restore = self.mae.forward_encoder(x, mask_ratio=0.75)
+            pred = self.mae.forward_decoder(latent, ids_restore)
+        return self.mae.forward_loss(x, pred, mask)  # fp32
+
+
 def save_checkpoint(path, epoch, model, optimizer, scheduler, loss):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save({
@@ -102,60 +120,65 @@ def load_checkpoint(path, model, optimizer, scheduler):
 
 
 def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | None = None, resume: str | None = None):
-    device = torch.device("cuda")
+    # torchrun sets LOCAL_RANK / WORLD_SIZE; fall back to single-GPU defaults.
+    rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    is_main = rank == 0
+
+    if world_size > 1:
+        dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(rank)
+    device = torch.device(f"cuda:{rank}")
 
     model = mae_vit_ultra_light().to(device)
 
-    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*9, num_threads=4)
+    # Each GPU runs a full 9216-sample batch (same as single-GPU).
+    # Total effective batch = 9216 * world_size; lr scales linearly.
+    per_gpu_batch = 1024 * 9
+    lr = 1.5e-4 * (per_gpu_batch * world_size / 256)  # linear scaling rule
+    dataloader = build_dali_loader(
+        "./data/yiddish_lines.npy",
+        batch_size=per_gpu_batch,
+        num_threads=4,
+        device_id=rank,
+        shard_id=rank,
+        num_shards=world_size,
+    )
 
-    # lr=1.5e-4 is tuned for batch_size=256. Linear scaling rule: lr = 1.5e-4 * (batch_size / 256).
-    # At batch_size=8192 that gives 4.8e-3. MAE is tolerant of deviations but worth aligning
-    # for real training runs.
-    optimizer = torch.optim.AdamW(model.parameters(), lr=4.8e-3, weight_decay=0.05, fused=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05, fused=True)
 
     # Cosine decay with 5% linear warmup — matches the MAE paper's schedule.
-    # max_lr=4.8e-3 is the linearly scaled lr for batch_size=8192 (base 1.5e-4 at 256).
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=4.8e-3,
+        max_lr=lr,
         steps_per_epoch=len(dataloader),
         epochs=num_epochs,
         pct_start=0.05,
         anneal_strategy="cos",
     )
 
-    # Compile the full training step (forward + backward + optimizer) into a single
-    # CUDA graph so the optimizer kernel launches are captured too, eliminating
-    # per-parameter dispatch overhead. max-autotune benchmarks multiple kernel
-    # implementations (GEMM tilings, Triton configs) and picks the fastest —
-    # longer first-step compile, but results are cached in .cache/.
+    # Load checkpoint before DDP wrapping so weights are already correct when
+    # DDP broadcasts rank-0 parameters to other ranks during construction.
+    start_epoch = 0
+    if resume:
+        start_epoch, _ = load_checkpoint(resume, model, optimizer, scheduler)
+        start_epoch += 1
+
+    step_module = _TrainStep(model)
+    if world_size > 1:
+        step_module = DDP(step_module, device_ids=[rank])
+
     @torch.compile(mode="max-autotune")
-    # @torch.compile(mode="default")
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
-        with torch.profiler.record_function("forward"):
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # forward_loss runs outside autocast (below) so patchify + var + MSE
-                # compute in fp32. bf16 var over 256 pixels is imprecise, especially
-                # for low-variance background patches common in Yiddish text.
-                latent, mask, ids_restore = model.forward_encoder(batch, mask_ratio=0.75)
-                pred = model.forward_decoder(latent, ids_restore)
-            loss = model.forward_loss(batch, pred, mask)  # fp32
-        with torch.profiler.record_function("backward"):
-            loss.backward()
-        with torch.profiler.record_function("optimizer_step"):
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+        loss = step_module(batch)
+        loss.backward()
+        optimizer.step()
         return loss
 
     model.train()
 
-    start_epoch = 0
-    if resume:
-        start_epoch, _ = load_checkpoint(resume, model, optimizer, scheduler)
-        start_epoch += 1  # resume from the next epoch
-
-    with TrainingLogger(device, num_epochs, len(dataloader), profile) as logger:
+    with TrainingLogger(device, num_epochs, len(dataloader), profile, silent=not is_main) as logger:
         try:
             for epoch in range(start_epoch, num_epochs):
                 logger.begin_epoch(epoch)
@@ -169,16 +192,27 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
                     logger.on_step()
 
                 avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
+                if world_size > 1:
+                    # Average the per-shard losses into one global loss for logging/stopping
+                    t = torch.tensor(avg_loss, device=device)
+                    dist.all_reduce(t, op=dist.ReduceOp.AVG)
+                    avg_loss = t.item()
+
                 logger.end_epoch(epoch, avg_loss)
-                save_checkpoint(CHECKPOINT_PATH, epoch, model, optimizer, scheduler, avg_loss)
+                if is_main:
+                    save_checkpoint(CHECKPOINT_PATH, epoch, model, optimizer, scheduler, avg_loss)
                 if target_loss is not None and avg_loss <= target_loss:
                     break
         except KeyboardInterrupt:
-            print(f"\nInterrupted. Resume with: --resume {CHECKPOINT_PATH}")
+            if is_main:
+                print(f"\nInterrupted. Resume with: --resume {CHECKPOINT_PATH}")
 
-        if profile:
+        if profile and is_main:
             with logger.profile_step():
                 train_step(batch)
+
+    if world_size > 1:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

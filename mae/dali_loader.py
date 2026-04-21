@@ -7,7 +7,8 @@ from nvidia.dali.pipeline import pipeline_def
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 
 
-def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
+def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0,
+                      shard_id=0, num_shards=1):
     """Build a DALI data pipeline backed by a pre-processed numpy memmap file.
 
     Expects npy_path to be a (N, H, W) uint8 array produced by prepare_dataset.py.
@@ -16,32 +17,34 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
 
     Args:
         npy_path:    Path to the .npy file produced by prepare_dataset.py.
-        batch_size:  Samples per batch.
+        batch_size:  Samples per batch (per GPU).
         num_threads: CPU threads for the external source callback.
         device_id:   GPU index.
+        shard_id:    Index of this GPU's data shard (0-based).
+        num_shards:  Total number of shards (= number of GPUs).
     """
     data = np.load(npy_path, mmap_mode='r')   # (N, H, W) uint8, memory-mapped
     n = len(data)
-    print(f"DALI pipeline: {n} images from {npy_path}  (memmap, no per-epoch decode)")
 
-    # Pre-shuffle index array; DALI external_source handles epoch-level reshuffling
-    # by passing a new permutation each time the iterator resets.
+    # Divide dataset into equal shards; each GPU only sees its own shard.
+    shard_size = n // num_shards
+    shard_indices = np.arange(shard_id * shard_size, (shard_id + 1) * shard_size)
+    print(f"DALI pipeline [{shard_id}/{num_shards}]: {shard_size} images from {npy_path}")
+
     rng = np.random.default_rng()
 
-    # Number of complete batches per epoch (DROP policy)
-    epoch_size = (n // batch_size) * batch_size
+    # Number of complete batches per epoch within this shard (DROP policy)
+    epoch_size = (shard_size // batch_size) * batch_size
 
     def source(sample_info):
         if sample_info.idx_in_epoch >= epoch_size:
-            # Signal end-of-epoch; DALI will stop and auto-reset
             raise StopIteration
         if sample_info.idx_in_epoch == 0:
-            # New epoch — reshuffle
-            source._perm = rng.permutation(n)
-        # Return (H, W, 1) uint8 so DALI treats it as a single-channel HWC image
+            # New epoch — reshuffle this shard's indices
+            source._perm = rng.permutation(shard_indices)
         return data[source._perm[sample_info.idx_in_epoch], :, :, np.newaxis].copy()
 
-    source._perm = rng.permutation(n)
+    source._perm = rng.permutation(shard_indices)
 
     @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id,
                   prefetch_queue_depth=1)
@@ -76,5 +79,5 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0):
             output_map=["images"],
             last_batch_policy=LastBatchPolicy.DROP,
             auto_reset=True,
-            size=epoch_size,
+            size=epoch_size,  # per-shard epoch size
         )
