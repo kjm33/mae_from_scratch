@@ -82,7 +82,7 @@ def train(profile: str | None = None):
 
     model = mae_vit_ultra_light().to(device)
 
-    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*8, num_threads=4)
+    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*6, num_threads=4)
 
     # lr=1.5e-4 is tuned for batch_size=256. Linear scaling rule: lr = 1.5e-4 * (batch_size / 256).
     # At batch_size=8192 that gives 4.8e-3. MAE is tolerant of deviations but worth aligning
@@ -106,8 +106,8 @@ def train(profile: str | None = None):
     # per-parameter dispatch overhead. max-autotune benchmarks multiple kernel
     # implementations (GEMM tilings, Triton configs) and picks the fastest —
     # longer first-step compile, but results are cached in .cache/.
-    #@torch.compile(mode="max-autotune")
-    @torch.compile(mode="default")
+    @torch.compile(mode="max-autotune")
+    # @torch.compile(mode="default")
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
         with torch.profiler.record_function("forward"):
@@ -121,7 +121,7 @@ def train(profile: str | None = None):
         with torch.profiler.record_function("backward"):
             loss.backward()
         with torch.profiler.record_function("optimizer_step"):
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         return loss
 
