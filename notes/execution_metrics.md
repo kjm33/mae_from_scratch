@@ -1,3 +1,23 @@
+with CUDA graps but without tokens interaction (lower memory usage)
+DALI pipeline: 238378 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
+Epoch 1/6 avg_loss=0.8010 time=24.8s
+Epoch 2/6 avg_loss=0.7065 time=6.8s
+Epoch 3/6 avg_loss=0.7064 time=6.8s
+Epoch 4/6 avg_loss=0.7046 time=6.8s
+Epoch 5/6 avg_loss=0.7044 time=6.9s
+Epoch 6/6 avg_loss=0.7043 time=6.9s
+  Epoch 6/6 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 38/38 loss 0.7043 VRAM 20.4 GB 0:00:04
+        Training Summary — None
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric        ┃ Value                ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total time    │ 0.02 h  (59 s)       │
+│ Total steps   │ 228                  │
+│ Avg steps/sec │ 3.86                 │
+│ Peak VRAM     │ 20.41 GB  (20899 MB) │
+│ Avg loss      │ 0.7212               │
+└───────────────┴──────────────────────┘
+
 WITHOUT CUDA graphs
 (venv) ➜  mae_from_scratch git:(main) ✗ ./profile_ncu.sh 15_large_batch_size
 ==PROF== Connected to process 387949 (/usr/bin/python3.12)
