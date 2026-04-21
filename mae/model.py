@@ -20,9 +20,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.models.vision_transformer import PatchEmbed, Block
+from timm.models.vision_transformer import Block
 
 from .pos_embed import get_1d_sincos_pos_embed, get_2d_sincos_pos_embed
+
+
+class LinearPatchEmbed(nn.Module):
+    """Conv2d-free patch embedding using reshape + nn.Linear.
+
+    For non-overlapping patches (stride == kernel_size), Conv2d is mathematically
+    equivalent to this formulation. Avoids cuDNN workspace VMM operations
+    (cuMemSetAccess / cuMemUnmap) that require cudaDeviceSynchronize and destroy
+    CUDA graph compatibility, causing ~30% GPU idle time.
+    """
+
+    def __init__(self, img_size, patch_size, in_chans, embed_dim):
+        super().__init__()
+        if isinstance(img_size, int):
+            img_h, img_w = img_size, img_size
+        else:
+            img_h, img_w = img_size
+        if isinstance(patch_size, int):
+            ph, pw = patch_size, patch_size
+        else:
+            ph, pw = patch_size
+        self.patch_size = (ph, pw)
+        self.grid_size = (img_h // ph, img_w // pw)
+        self.num_patches = self.grid_size[0] * self.grid_size[1]
+        self.proj = nn.Linear(in_chans * ph * pw, embed_dim)
+
+    def forward(self, x):
+        N, C, H, W = x.shape
+        ph, pw = self.patch_size
+        gh, gw = self.grid_size
+        # (N, C, gh, ph, gw, pw) → (N, gh*gw, ph*pw*C) → (N, gh*gw, embed_dim)
+        x = x.reshape(N, C, gh, ph, gw, pw)
+        x = x.permute(0, 2, 4, 3, 5, 1).reshape(N, gh * gw, ph * pw * C)
+        return self.proj(x)
 
 
 class FlashAttention(nn.Module):
@@ -113,7 +147,7 @@ class MaskedAutoencoderViT(nn.Module):
         # --------------------------------------------------------------------------
         # MAE encoder: processes only the *visible* (non-masked) patches
         # --------------------------------------------------------------------------
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        self.patch_embed = LinearPatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
