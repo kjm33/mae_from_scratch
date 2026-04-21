@@ -40,6 +40,7 @@ prepare_dataset.py    # one-time script: decode + resize images → ./data/yiddi
 training_logger.py    # TrainingLogger — rich progress bar, VRAM tracking, profiler, summary
 analyze_trace.py      # CLI tool: analyze PyTorch profiler .pt.trace.json files
 analyze_nsys.py       # CLI tool: analyze Nsight Systems .nsys-rep / .sqlite files
+analyze_ncu.py        # CLI tool: analyze Nsight Compute .ncu-rep files (per-kernel GPU metrics)
 profile_nsys.sh       # wrapper: runs training under nsys, saves to nsys/<name>.nsys-rep
 ```
 
@@ -47,23 +48,25 @@ profile_nsys.sh       # wrapper: runs training under nsys, saves to nsys/<name>.
 
 **FlashAttention** wraps `F.scaled_dot_product_attention` and is injected into timm `Block` via `attn_layer=FlashAttention`.
 
-**Factory functions** in `mae/model.py`: `mae_vit_base_patch16`, `mae_vit_large_patch16`, `mae_vit_huge_patch14`, `mae_vit_base_patch32x8_32x512`, `mae_vit_ultra_slim` (current Yiddish config).
+**LinearPatchEmbed** — custom patch embedding using reshape + `nn.Linear` instead of timm's `PatchEmbed` (`nn.Conv2d`). For non-overlapping patches (stride == kernel_size) these are mathematically identical, but Conv2d triggers cuDNN workspace VMM (`cuMemSetAccess`/`cuMemUnmap`) that requires `cudaDeviceSynchronize` and causes ~33% GPU idle time. LinearPatchEmbed has no cuDNN dependency and is fully CUDA-graph-compatible.
+
+**Factory functions** in `mae/model.py`: `mae_vit_base_patch16`, `mae_vit_large_patch16`, `mae_vit_huge_patch14`, `mae_vit_base_patch32x8_32x512`, `mae_vit_ultra_light` (current Yiddish config).
 
 **Rectangular patch support** — `patch_size` accepts a `(ph, pw)` tuple throughout `MaskedAutoencoderViT` (`patchify`, `unpatchify`, `decoder_pred`, `_grid_size` all use `ph`/`pw` separately).
 
-**Mixed precision** via `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` — runs matmuls/convs in bf16, keeps numerically sensitive ops (softmax, layer norm, loss) in fp32 automatically.
+**Mixed precision** via `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` — runs matmuls in bf16, keeps numerically sensitive ops (softmax, layer norm, loss) in fp32 automatically.
 
 ## Key Hyperparameters
 
 - **patch_size=(32, 8)** — full-height column patches; grid is (1, 64) for 32×512 images
 - **mask_ratio=0.75** (75% patches masked, 25% visible to encoder)
 - **norm_pix_loss=True** normalizes target patches to zero-mean unit-variance before MSE
-- **batch_size=256**, **lr=1.5e-4**, **weight_decay=0.05**
+- **batch_size=9216** (1024×9), **lr=4.8e-3** (linear scaling from base 1.5e-4 at batch 256), **weight_decay=0.05**
 
-## Current Model — `mae_vit_ultra_slim`
+## Current Model — `mae_vit_ultra_light`
 
 embed_dim=256, depth=6, num_heads=4, decoder_embed_dim=128, decoder_depth=2, patch_size=(32,8).
-108 learnable parameters groups. ~10ms GPU per step.
+5,161,344 parameters. ~10ms GPU per step.
 
 ## Data Pipeline
 
@@ -120,15 +123,29 @@ ranges (DALI pipeline stages), memory ops, bottleneck detection.
 ## Performance
 
 Target: RTX 3090 (24GB). Optimizations:
-- **bf16 autocast** — matmuls/convs in bf16
+- **bf16 autocast** — matmuls in bf16; loss/norm stays fp32
 - **`torch.compile(mode="max-autotune")`** — benchmarks kernel configs on first run, caches to `.cache/`; subsequent runs load from cache
 - **Full train_step compiled** — `zero_grad` + forward + backward + optimizer captured into two CUDA graphs; CPU only fires two `cudaGraphLaunch` calls per step (~1ms total CPU overhead)
 - **`torch.profiler.record_function`** annotations inside `train_step` — preserved by `torch.compile`, visible in TensorBoard trace; zero overhead when profiler is inactive
 - **FlashAttention** via SDPA
+- **LinearPatchEmbed** — reshape + `nn.Linear` instead of Conv2d; eliminates cuDNN workspace VMM and ~1300 DeviceSyncs per run (was causing ~33% GPU idle time)
 - **DALI memmap pipeline** — no per-epoch decode/resize
 - **Loss sync once per epoch** — eliminates per-step `cudaStreamSynchronize`
 - **Fused AdamW** (`fused=True`) — single `multi_tensor_apply_kernel` over all parameters
+- **No `clip_grad_norm_`** — removed; was causing a blocking sync + ~0.7 ms kernel overhead per step
 
-`mae_vit_ultra_slim` steady-state: ~10ms GPU per step, 98.5% kernel density (single-step trace),
-two CUDA graph launches. Triton fused kernels dominate (44%), FlashAttention backward 15%,
-optimizer 10%.
+`mae_vit_ultra_light` steady-state: ~10ms GPU per step, ~98.5% kernel density (single-step trace),
+two CUDA graph launches. Triton fused kernels dominate, FlashAttention backward ~15%, GEMM ~25%.
+
+## Profiling History (nsys runs)
+
+| Run | Config | GPU Density | Notes |
+|-----|--------|-------------|-------|
+| 9   | ultra_light baseline | 98.5% | Reference — CUDA graphs, no Conv |
+| TokenInteraction | +Conv1d depthwise | 70.2% | 48s DeviceSync; Conv1d removed |
+| 17  | Conv1d removed, Conv2d (PatchEmbed) still present | 67.1% | 44s DeviceSync; PatchEmbed replaced |
+| next| LinearPatchEmbed | ~98.5% expected | No cuDNN anywhere in model |
+
+**Key lesson:** Any `nn.Conv*` in the training graph can trigger cuDNN workspace VMM
+(`cuMemSetAccess`/`cuMemUnmap`), which requires `cudaDeviceSynchronize` and causes
+seconds-scale GPU stalls. Use `nn.Linear` + reshape for all patch-embedding operations.
