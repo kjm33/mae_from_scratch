@@ -25,6 +25,7 @@ os.environ["TORCHINDUCTOR_CACHE_DIR"] = _cache_dir
 
 IMG_SIZE = (32, 512)
 LOG_DIR = "runs/mae_yiddish"
+CHECKPOINT_PATH = "checkpoints/checkpoint.pt"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif")
 # Prefer this file for TensorBoard reconstruction when present in lines_dir
 PREFERRED_MONITOR_IMAGE = "BN_523.715_0013.tsv.processed_LINE_5.TIF"
@@ -77,19 +78,41 @@ def log_reconstruction(writer, model, monitor_img, epoch, mask_ratio=0.75):
     writer.add_image("monitor/reconstructed", r, epoch, dataformats="CHW")
 
 
-def train(profile: str | None = None):
+def save_checkpoint(path, epoch, model, optimizer, scheduler, loss):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+        "epoch": epoch,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "loss": loss,
+    }, path)
+    print(f"Checkpoint saved → {path}  (epoch {epoch + 1}, loss {loss:.4f})")
+
+
+def load_checkpoint(path, model, optimizer, scheduler):
+    ckpt = torch.load(path, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    optimizer.load_state_dict(ckpt["optimizer"])
+    scheduler.load_state_dict(ckpt["scheduler"])
+    epoch = ckpt["epoch"]
+    loss = ckpt.get("loss")
+    print(f"Resumed from {path}  (epoch {epoch + 1}, loss {loss:.4f})")
+    return epoch, loss
+
+
+def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | None = None, resume: str | None = None):
     device = torch.device("cuda")
 
     model = mae_vit_ultra_light().to(device)
 
-    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*6, num_threads=4)
+    dataloader = build_dali_loader("./data/yiddish_lines.npy", batch_size=1024*9, num_threads=4)
 
     # lr=1.5e-4 is tuned for batch_size=256. Linear scaling rule: lr = 1.5e-4 * (batch_size / 256).
     # At batch_size=8192 that gives 4.8e-3. MAE is tolerant of deviations but worth aligning
     # for real training runs.
     optimizer = torch.optim.AdamW(model.parameters(), lr=4.8e-3, weight_decay=0.05, fused=True)
 
-    num_epochs = 6
     # Cosine decay with 5% linear warmup — matches the MAE paper's schedule.
     # max_lr=4.8e-3 is the linearly scaled lr for batch_size=8192 (base 1.5e-4 at 256).
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -127,20 +150,31 @@ def train(profile: str | None = None):
 
     model.train()
 
+    start_epoch = 0
+    if resume:
+        start_epoch, _ = load_checkpoint(resume, model, optimizer, scheduler)
+        start_epoch += 1  # resume from the next epoch
+
     with TrainingLogger(device, num_epochs, len(dataloader), profile) as logger:
-        for epoch in range(num_epochs):
-            logger.begin_epoch(epoch)
-            epoch_loss = torch.zeros(1, device=device)
+        try:
+            for epoch in range(start_epoch, num_epochs):
+                logger.begin_epoch(epoch)
+                epoch_loss = torch.zeros(1, device=device)
 
-            for step, batch_data in enumerate(dataloader):
-                batch = batch_data[0]["images"]  # (N, 1, H, W) float32 on GPU
-                loss = train_step(batch)
-                scheduler.step()  # CPU-side lr update — outside compiled graph
-                epoch_loss += loss.detach()
-                logger.on_step()
+                for step, batch_data in enumerate(dataloader):
+                    batch = batch_data[0]["images"]  # (N, 1, H, W) float32 on GPU
+                    loss = train_step(batch)
+                    scheduler.step()  # CPU-side lr update — outside compiled graph
+                    epoch_loss += loss.detach()
+                    logger.on_step()
 
-            avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
-            logger.end_epoch(epoch, avg_loss)
+                avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
+                logger.end_epoch(epoch, avg_loss)
+                save_checkpoint(CHECKPOINT_PATH, epoch, model, optimizer, scheduler, avg_loss)
+                if target_loss is not None and avg_loss <= target_loss:
+                    break
+        except KeyboardInterrupt:
+            print(f"\nInterrupted. Resume with: --resume {CHECKPOINT_PATH}")
 
         if profile:
             with logger.profile_step():
@@ -150,5 +184,8 @@ def train(profile: str | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", default=None, help="Profile name — captures a trace to runs/<name>_<timestamp>.pt.trace.json")
+    parser.add_argument("--epochs", type=int, default=6, help="Number of training epochs")
+    parser.add_argument("--target-loss", type=float, default=None, help="Stop early when avg epoch loss reaches this value")
+    parser.add_argument("--resume", default=None, metavar="PATH", help=f"Resume from checkpoint (default path: {CHECKPOINT_PATH})")
     args = parser.parse_args()
-    train(profile=args.profile)
+    train(profile=args.profile, num_epochs=args.epochs, target_loss=args.target_loss, resume=args.resume)
