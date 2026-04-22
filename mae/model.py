@@ -409,3 +409,98 @@ def mae_vit_ultra_light(**kwargs):
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         norm_pix_loss=True,
         **kwargs)
+
+
+def mae_vit_small_patch32x8(**kwargs):
+    """MAE ViT-Small for Yiddish text: img 32x512, patch (32h,8w), 1 channel.
+
+    embed_dim=384, depth=6, num_heads=6 — ~12.7M params (2.5× ultra_light).
+    Grid: (1, 64) = 64 patches. 1D sin-cos positional embeddings (full-height patches).
+    """
+    return MaskedAutoencoderViT(
+        img_size=(32, 512),
+        patch_size=(32, 8),
+        in_chans=1,
+        embed_dim=384,
+        depth=6,
+        num_heads=6,
+        decoder_embed_dim=192,
+        decoder_depth=4,
+        decoder_num_heads=6,
+        mlp_ratio=4,
+        decoder_mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_pix_loss=True,
+        **kwargs)
+
+
+def mae_vit_small_patch16x16(**kwargs):
+    """MAE ViT-Small for Yiddish text: img 32x512, patch (16h,16w), 1 channel.
+
+    embed_dim=384, depth=6, num_heads=6 — ~12.7M params (2.5× ultra_light).
+    Grid: (2, 32) = 64 patches. 2D sin-cos positional embeddings.
+    """
+    return MaskedAutoencoderViT(
+        img_size=(32, 512),
+        patch_size=(16, 16),
+        in_chans=1,
+        embed_dim=384,
+        depth=6,
+        num_heads=6,
+        decoder_embed_dim=192,
+        decoder_depth=4,
+        decoder_num_heads=6,
+        mlp_ratio=4,
+        decoder_mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_pix_loss=True,
+        **kwargs)
+
+
+def mae_vit_ultra_light_16x16(**kwargs):
+    """MAE for Yiddish text/grayscale: img 32x512, patch (16h,16w), 1 channel.
+
+    Grid: (2, 32) = 64 patches. Encoder sees 16 patches (25% of 64).
+    2D sin-cos positional embeddings (grid_h=2 > 1).
+    Each patch: 16×16×1 = 256 pixels — square patches, 2 rows of patches.
+    Same patch count as (32,8) but with proper 2D spatial structure.
+    """
+    return MaskedAutoencoderViT(
+        img_size=(32, 512),
+        patch_size=(16, 16),
+        in_chans=1,
+        embed_dim=256,
+        depth=6,
+        num_heads=4,
+        decoder_embed_dim=128,
+        decoder_depth=2,
+        decoder_num_heads=4,
+        mlp_ratio=4,
+        decoder_mlp_ratio=2,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_pix_loss=True,
+        **kwargs)
+
+
+def mae_vit_ultra_light_8x8(**kwargs):
+    """MAE for Yiddish text/grayscale: img 32x512, patch (8h,8w), 1 channel.
+
+    Grid: (4, 64) = 256 patches. Encoder sees 64 patches (25% of 256).
+    2D sin-cos positional embeddings (grid_h=4 > 1, auto-selected in initialize_weights).
+    Each patch: 8×8×1 = 64 pixels vs 256 for (32,8) — finer spatial resolution.
+    """
+    return MaskedAutoencoderViT(
+        img_size=(32, 512),
+        patch_size=(8, 8),
+        in_chans=1,
+        embed_dim=256,
+        depth=6,
+        num_heads=4,
+        decoder_embed_dim=128,
+        decoder_depth=2,
+        decoder_num_heads=4,
+        mlp_ratio=4,
+        decoder_mlp_ratio=2,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_pix_loss=True,
+        **kwargs)

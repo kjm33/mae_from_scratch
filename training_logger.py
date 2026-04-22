@@ -58,6 +58,7 @@ class TrainingLogger:
 
     def __enter__(self):
         self.train_start = time.time()
+        torch.cuda.reset_peak_memory_stats(self.device)
         if not self.silent:
             self._progress = Progress(
                 SpinnerColumn(),
@@ -162,6 +163,7 @@ class TrainingLogger:
         table.add_row("Total time", f"{elapsed / 3600:.2f} h  ({elapsed:.0f} s)")
         table.add_row("Total steps", str(self.total_steps))
         table.add_row("Avg steps/sec", f"{self.total_steps / elapsed:.2f}")
-        table.add_row("Peak VRAM", f"{self.max_vram_mb / 1024:.2f} GB  ({self.max_vram_mb:.0f} MB)")
+        peak_mb = torch.cuda.max_memory_reserved(self.device) / 1024**2
+        table.add_row("Peak VRAM", f"{peak_mb / 1024:.2f} GB  ({peak_mb:.0f} MB)")
         table.add_row("Avg loss", f"{self.total_loss / self.total_epochs:.4f}" if self.total_epochs else "n/a")
         self.console.print(table)

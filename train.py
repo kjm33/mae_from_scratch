@@ -5,6 +5,8 @@ import time
 # Suppress TensorFlow/absl noise (imported transitively by TensorBoard)
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+# Silence torchrun's OMP_NUM_THREADS warning; 1 thread per process is correct for GPU-heavy training.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import logging
 
@@ -18,7 +20,9 @@ logging.getLogger("torch._dynamo.variables.torch").setLevel(logging.ERROR)
 from torch.utils.tensorboard import SummaryWriter
 from training_logger import TrainingLogger
 
-from mae import MaskedAutoencoderViT, mae_vit_ultra_light
+from mae import (MaskedAutoencoderViT,
+                 mae_vit_ultra_light, mae_vit_ultra_light_8x8, mae_vit_ultra_light_16x16,
+                 mae_vit_small_patch32x8, mae_vit_small_patch16x16)
 from mae.dali_loader import build_dali_loader
 
 _cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
@@ -130,11 +134,11 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
     torch.cuda.set_device(rank)
     device = torch.device(f"cuda:{rank}")
 
-    model = mae_vit_ultra_light().to(device)
+    model = mae_vit_small_patch32x8().to(device)
 
     # Each GPU runs a full 9216-sample batch (same as single-GPU).
     # Total effective batch = 9216 * world_size; lr scales linearly.
-    per_gpu_batch = 1024 * 9
+    per_gpu_batch = 512
     lr = 1.5e-4 * (per_gpu_batch * world_size / 256)  # linear scaling rule
     dataloader = build_dali_loader(
         "./data/yiddish_lines.npy",
@@ -168,11 +172,12 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
     if world_size > 1:
         step_module = DDP(step_module, device_ids=[rank])
 
-    @torch.compile(mode="max-autotune")
+    @torch.compile(mode="default", disable=True)
     def train_step(batch):
         optimizer.zero_grad(set_to_none=True)
         loss = step_module(batch)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         return loss
 
@@ -199,8 +204,8 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
                     avg_loss = t.item()
 
                 logger.end_epoch(epoch, avg_loss)
-                if is_main:
-                    save_checkpoint(CHECKPOINT_PATH, epoch, model, optimizer, scheduler, avg_loss)
+                # if is_main:
+                #     save_checkpoint(CHECKPOINT_PATH, epoch, model, optimizer, scheduler, avg_loss)
                 if target_loss is not None and avg_loss <= target_loss:
                     break
         except KeyboardInterrupt:
