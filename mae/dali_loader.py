@@ -34,24 +34,31 @@ def build_dali_loader(npy_path, batch_size=256, num_threads=4, device_id=0,
     rng = np.random.default_rng()
 
     # Number of complete batches per epoch within this shard (DROP policy)
-    epoch_size = (shard_size // batch_size) * batch_size
+    num_batches = shard_size // batch_size
+    epoch_size = num_batches * batch_size
 
-    def source(sample_info):
-        if sample_info.idx_in_epoch >= epoch_size:
-            raise StopIteration
-        if sample_info.idx_in_epoch == 0:
-            # New epoch — reshuffle this shard's indices
-            source._perm = rng.permutation(shard_indices)
-        return data[source._perm[sample_info.idx_in_epoch], :, :, np.newaxis].copy()
+    # batch=True: DALI calls source(epoch_idx) once per batch; epoch_idx is a plain int.
+    # Track iteration manually since DALI does not pass it in this mode.
+    state = {"epoch": -1, "iteration": 0, "perm": rng.permutation(shard_indices)}
 
-    source._perm = rng.permutation(shard_indices)
+    def source(epoch_idx):
+        if epoch_idx != state["epoch"]:
+            state["epoch"] = epoch_idx
+            state["iteration"] = 0
+            state["perm"][:] = rng.permutation(shard_indices)
+        start = state["iteration"] * batch_size
+        state["iteration"] += 1
+        idx = state["perm"][start:start + batch_size]
+        # data[idx] is (B, H, W) uint8; add channel dim → list of (H, W, 1) arrays
+        batch = data[idx]  # one vectorised memmap read
+        return [batch[i, :, :, np.newaxis].copy() for i in range(batch_size)]
 
     @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id,
                   prefetch_queue_depth=1)
     def _pipeline():
         images = fn.external_source(
             source=source,
-            batch=False,
+            batch=True,
             dtype=types.UINT8,
             layout="HWC",
         )
