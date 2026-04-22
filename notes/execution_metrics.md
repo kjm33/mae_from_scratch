@@ -1,3 +1,58 @@
+2 GPUS 32x8 - small model - batch_size=512 - the 0.7 plateau effect overcome:
+
+Epoch 1/50 avg_loss=0.7737 time=14.0s
+Epoch 2/50 avg_loss=0.6110 time=13.8s
+Epoch 3/50 avg_loss=0.5557 time=14.0s
+Epoch 4/50 avg_loss=0.5437 time=14.2s
+Epoch 5/50 avg_loss=0.5391 time=14.3s
+Epoch 6/50 avg_loss=0.5359 time=14.5s
+Epoch 7/50 avg_loss=0.5341 time=14.6s
+Epoch 8/50 avg_loss=0.5904 time=14.7s
+Epoch 9/50 avg_loss=0.7039 time=14.7s
+Epoch 10/50 avg_loss=0.7051 time=14.8s
+Epoch 11/50 avg_loss=0.7034 time=14.8s
+Epoch 12/50 avg_loss=0.6766 time=14.9s
+Epoch 13/50 avg_loss=0.6063 time=15.0s
+Epoch 14/50 avg_loss=0.5651 time=15.0s
+Epoch 15/50 avg_loss=0.5469 time=15.0s
+Epoch 16/50 avg_loss=0.5415 time=15.1s
+Epoch 17/50 avg_loss=0.5381 time=15.1s
+Epoch 18/50 avg_loss=0.5356 time=15.1s
+Epoch 19/50 avg_loss=0.5342 time=15.1s
+Epoch 20/50 avg_loss=0.5336 time=15.1s
+Epoch 21/50 avg_loss=0.5330 time=15.1s
+Epoch 22/50 avg_loss=0.5350 time=15.2s
+Epoch 23/50 avg_loss=0.5315 time=15.1s
+Epoch 24/50 avg_loss=0.5304 time=15.2s
+Epoch 25/50 avg_loss=0.5298 time=15.2s
+Epoch 26/50 avg_loss=0.5294 time=15.2s
+Epoch 27/50 avg_loss=0.5289 time=15.2s
+Epoch 28/50 avg_loss=0.5282 time=15.2s
+Epoch 29/50 avg_loss=0.5278 time=15.2s
+Epoch 30/50 avg_loss=0.5269 time=15.2s
+Epoch 31/50 avg_loss=0.5271 time=15.2s
+Epoch 32/50 avg_loss=0.5272 time=15.2s
+Epoch 33/50 avg_loss=0.5262 time=15.3s
+Epoch 34/50 avg_loss=0.5259 time=15.2s
+Epoch 35/50 avg_loss=0.5254 time=15.2s
+Epoch 36/50 avg_loss=0.5247 time=15.2s
+Epoch 37/50 avg_loss=0.5248 time=15.3s
+Epoch 38/50 avg_loss=0.5246 time=15.2s
+Epoch 39/50 avg_loss=0.5241 time=15.3s
+Epoch 40/50 avg_loss=0.5237 time=15.2s
+Epoch 41/50 avg_loss=0.5235 time=15.3s
+Epoch 42/50 avg_loss=0.5237 time=15.3s
+Epoch 43/50 avg_loss=0.5224 time=15.3s
+Epoch 44/50 avg_loss=0.5229 time=15.3s
+Epoch 45/50 avg_loss=0.5225 time=15.3s
+Epoch 46/50 avg_loss=0.5229 time=15.3s
+Epoch 47/50 avg_loss=0.5226 time=15.2s
+Epoch 48/50 avg_loss=0.5226 time=15.3s
+Epoch 49/50 avg_loss=0.5226 time=15.3s
+Epoch 50/50 avg_loss=0.5221 time=15.3s
+
+----
+
 with CUDA graps but without tokens interaction (lower memory usage)
 DALI pipeline: 238378 images from ./data/yiddish_lines.npy  (memmap, no per-epoch decode)
 Epoch 1/6 avg_loss=0.8010 time=24.8s
