@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import os
 import time
 
@@ -123,7 +124,7 @@ def load_checkpoint(path, model, optimizer, scheduler):
     return epoch, loss
 
 
-def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | None = None, resume: str | None = None):
+def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | None = None, resume: str | None = None, accum_steps: int = 4):
     # torchrun sets LOCAL_RANK / WORLD_SIZE; fall back to single-GPU defaults.
     rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -136,10 +137,9 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
 
     model = mae_vit_small_patch32x8().to(device)
 
-    # Each GPU runs a full 9216-sample batch (same as single-GPU).
-    # Total effective batch = 9216 * world_size; lr scales linearly.
     per_gpu_batch = 512
-    lr = 1.5e-4 * (per_gpu_batch * world_size / 256)  # linear scaling rule
+    effective_batch = per_gpu_batch * accum_steps * world_size
+    lr = 1.5e-4 * (effective_batch / 256)  # linear scaling rule applied to effective batch
     dataloader = build_dali_loader(
         "./data/yiddish_lines.npy",
         batch_size=per_gpu_batch,
@@ -151,11 +151,14 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05, fused=True)
 
+    # Optimizer steps per epoch: one step per accum_steps micro-batches.
+    optimizer_steps_per_epoch = len(dataloader) // accum_steps
+
     # Cosine decay with 5% linear warmup — matches the MAE paper's schedule.
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
-        steps_per_epoch=len(dataloader),
+        steps_per_epoch=optimizer_steps_per_epoch,
         epochs=num_epochs,
         pct_start=0.05,
         anneal_strategy="cos",
@@ -172,31 +175,43 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
     if world_size > 1:
         step_module = DDP(step_module, device_ids=[rank])
 
-    @torch.compile(mode="default", disable=True)
-    def train_step(batch):
-        optimizer.zero_grad(set_to_none=True)
+    def forward_backward(batch):
+        """Forward + scaled backward for one micro-batch. Does NOT step the optimizer."""
         loss = step_module(batch)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-        return loss
+        (loss / accum_steps).backward()
+        return loss.detach()
 
     model.train()
+    optimizer.zero_grad(set_to_none=True)
 
     with TrainingLogger(device, num_epochs, len(dataloader), profile, silent=not is_main) as logger:
         try:
             for epoch in range(start_epoch, num_epochs):
                 logger.begin_epoch(epoch)
                 epoch_loss = torch.zeros(1, device=device)
+                num_steps = len(dataloader)
 
                 for step, batch_data in enumerate(dataloader):
                     batch = batch_data[0]["images"]  # (N, 1, H, W) float32 on GPU
-                    loss = train_step(batch)
-                    scheduler.step()  # CPU-side lr update — outside compiled graph
-                    epoch_loss += loss.detach()
+                    is_update = (step + 1) % accum_steps == 0 or (step + 1) == num_steps
+
+                    # Skip DDP all-reduce on accumulation steps; sync only on optimizer update.
+                    sync_ctx = (contextlib.nullcontext()
+                                if is_update or world_size == 1
+                                else step_module.no_sync())
+                    with sync_ctx:
+                        loss = forward_backward(batch)
+
+                    epoch_loss += loss
                     logger.on_step()
 
-                avg_loss = (epoch_loss / len(dataloader)).item()  # one sync per epoch
+                    if is_update:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        optimizer.step()
+                        scheduler.step()
+                        optimizer.zero_grad(set_to_none=True)
+
+                avg_loss = (epoch_loss / num_steps).item()  # one sync per epoch
                 if world_size > 1:
                     # Average the per-shard losses into one global loss for logging/stopping
                     t = torch.tensor(avg_loss, device=device)
@@ -213,8 +228,10 @@ def train(profile: str | None = None, num_epochs: int = 6, target_loss: float | 
                 print(f"\nInterrupted. Resume with: --resume {CHECKPOINT_PATH}")
 
         if profile and is_main:
+            optimizer.zero_grad(set_to_none=True)
             with logger.profile_step():
-                train_step(batch)
+                forward_backward(batch)
+            optimizer.zero_grad(set_to_none=True)
 
     if world_size > 1:
         dist.destroy_process_group()
@@ -226,5 +243,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=6, help="Number of training epochs")
     parser.add_argument("--target-loss", type=float, default=None, help="Stop early when avg epoch loss reaches this value")
     parser.add_argument("--resume", default=None, metavar="PATH", help=f"Resume from checkpoint (default path: {CHECKPOINT_PATH})")
+    parser.add_argument("--accum-steps", type=int, default=4, help="Gradient accumulation steps (effective_batch = per_gpu_batch × accum_steps × world_size)")
     args = parser.parse_args()
-    train(profile=args.profile, num_epochs=args.epochs, target_loss=args.target_loss, resume=args.resume)
+    train(profile=args.profile, num_epochs=args.epochs, target_loss=args.target_loss, resume=args.resume, accum_steps=args.accum_steps)
